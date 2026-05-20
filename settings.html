@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>設定 — Shell</title>
+<meta name="description" content="進捗のエクスポート・インポート・リセット。">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__brand-mark">❯</span>
+      <span>Shell</span>
+    </a>
+    <nav class="nav__links" aria-label="グローバル">
+      <a class="nav__link" data-page="index" href="index.html">ホーム</a>
+      <a class="nav__link" data-page="cheatsheet" href="cheatsheet.html">チートシート</a>
+      <a class="nav__link" data-page="settings" href="settings.html">設定</a>
+      <a class="nav__link" data-page="about" href="about.html">このサイトについて</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="section">
+    <div class="container container--narrow">
+      <div class="eyebrow">Settings</div>
+      <h1 class="h1" style="margin-top: var(--s-2);">設定</h1>
+      <p class="lead" style="margin-top: var(--s-3);">進捗の保存・読み込み・リセットを行います。</p>
+
+      <div data-storage-banner style="margin-top: var(--s-5);"></div>
+
+      <div style="margin-top: var(--s-7);">
+        <!-- 現在の進捗 -->
+        <section class="settings-section">
+          <h2 class="settings-section__title">現在の進捗</h2>
+          <p class="settings-section__sub">このブラウザに保存されている学習進捗の状況です。</p>
+          <div style="margin-top: var(--s-4);">
+            <div class="progress">
+              <div class="progress__bar">
+                <div class="progress__fill" id="sFill" style="width: 0%"></div>
+              </div>
+              <div class="progress__label" id="sLabel">0 / 35</div>
+            </div>
+          </div>
+          <div class="muted" id="sStatus" style="margin-top: var(--s-3); font-size: var(--t-small);">読み込み中…</div>
+        </section>
+
+        <!-- エクスポート -->
+        <section class="settings-section">
+          <h2 class="settings-section__title">進捗をエクスポート</h2>
+          <p class="settings-section__sub">あなたの進捗を JSON ファイルとしてダウンロードします。別の端末・別のブラウザに引き継ぎたいときや、バックアップとして残しておきたいときにご利用ください。</p>
+          <div class="settings-section__actions">
+            <button class="btn btn--primary" id="exportBtn">JSON をダウンロード</button>
+          </div>
+        </section>
+
+        <!-- インポート -->
+        <section class="settings-section">
+          <h2 class="settings-section__title">進捗をインポート</h2>
+          <p class="settings-section__sub">エクスポートで保存した JSON ファイルを読み込み、進捗を復元します。読み込み方法は2種類選べます。</p>
+
+          <div class="field" style="margin-top: var(--s-5);">
+            <label class="field__label" for="importMode">読み込みモード</label>
+            <select class="field__input" id="importMode">
+              <option value="merge">追加 — 既存の進捗を残しつつ、ファイルのクリア状況を取り込む（推奨）</option>
+              <option value="replace">置換 — 既存の進捗を全て上書きしてファイルの内容にする</option>
+            </select>
+          </div>
+
+          <div class="settings-section__actions">
+            <input type="file" id="importFile" accept="application/json,.json" style="display: none;">
+            <button class="btn btn--secondary" id="importBtn">JSON ファイルを選ぶ</button>
+            <span class="muted" id="importHint" style="font-size: var(--t-small); align-self: center;">.json ファイルを選択してください</span>
+          </div>
+        </section>
+
+        <!-- リセット -->
+        <section class="settings-section">
+          <h2 class="settings-section__title" style="color: var(--accent-danger);">進捗をリセット</h2>
+          <p class="settings-section__sub">このブラウザに保存されている進捗をすべて消去します。最初からやり直したいときにご利用ください。<strong style="color: var(--accent-warm);">この操作は元に戻せません</strong>。事前にエクスポートでバックアップを取っておくことをおすすめします。</p>
+          <div class="settings-section__actions">
+            <button class="btn btn--danger" id="resetBtn">すべての進捗を消去する</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__credits">
+      <div>本サイトは <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> に着想を得た日本語の学習教材です。問題文・シナリオ・解説はすべて本サイト独自に新規作成しています。</div>
+      <div style="margin-top: var(--s-2);">© Shell.</div>
+    </div>
+    <div class="footer__nav">
+      <a href="cheatsheet.html">Linux コマンドチートシート</a>
+      <a href="settings.html">進捗の保存・読み込み</a>
+      <a href="about.html">このサイトについて</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/progress.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+  const fillEl   = $("sFill");
+  const labelEl  = $("sLabel");
+  const statusEl = $("sStatus");
+
+  function refreshProgress() {
+    const total = Progress.getTotalLevels();
+    const cleared = Progress.getClearedCount();
+    const last = Progress.state.lastLevel;
+    fillEl.style.width = (cleared / total * 100).toFixed(1) + "%";
+    labelEl.textContent = cleared + " / " + total;
+    if (cleared === 0) {
+      statusEl.textContent = "まだクリアしたレベルはありません。";
+    } else if (cleared >= total) {
+      statusEl.textContent = "全レベルクリア済みです。";
+    } else {
+      statusEl.textContent = "次に挑戦するのは Level " + last + " です。";
+    }
+    if (!Progress.isPersistent()) {
+      statusEl.textContent += "（自動保存は無効です）";
+    }
+  }
+
+  // エクスポート
+  $("exportBtn").addEventListener("click", () => {
+    Progress.exportToFile();
+    App.toast("ダウンロードを開始しました");
+  });
+
+  // インポート
+  const fileInput = $("importFile");
+  $("importBtn").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const mode = $("importMode").value;
+    try {
+      const result = await Progress.importFromFile(file, mode);
+      App.toast("読み込みました（クリア合計 " + result.totalCleared + "）");
+      $("importHint").textContent = file.name + " を読み込みました";
+    } catch (e) {
+      App.toast("読み込み失敗: " + e.message);
+      $("importHint").textContent = "読み込みに失敗しました";
+    } finally {
+      fileInput.value = "";
+    }
+  });
+
+  // リセット
+  $("resetBtn").addEventListener("click", () => {
+    if (!confirm("本当にすべての進捗を消去しますか？ この操作は元に戻せません。")) return;
+    Progress.reset();
+    App.toast("進捗をリセットしました");
+  });
+
+  // 進捗変更通知でリフレッシュ
+  Progress.onChange(refreshProgress);
+  refreshProgress();
+})();
+</script>
+
+</body>
+</html>

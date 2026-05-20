@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>Linux コマンドチートシート — Shell</title>
+<meta name="description" content="日本語の Linux コマンド辞典。100以上のコマンドを検索・カテゴリ別に閲覧できる初心者向けチートシート。">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__brand-mark">❯</span>
+      <span>Shell</span>
+    </a>
+    <nav class="nav__links" aria-label="グローバル">
+      <a class="nav__link" data-page="index" href="index.html">ホーム</a>
+      <a class="nav__link" data-page="cheatsheet" href="cheatsheet.html">チートシート</a>
+      <a class="nav__link" data-page="settings" href="settings.html">設定</a>
+      <a class="nav__link" data-page="about" href="about.html">このサイトについて</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="container sheet-header">
+    <div class="eyebrow">Cheatsheet</div>
+    <h1 class="sheet-header__title">Linux コマンドチートシート</h1>
+    <p class="sheet-header__sub">日本語の解説で 100 以上のコマンドを掲載しています。検索やカテゴリで絞り込んでご活用ください。</p>
+  </section>
+
+  <section class="sheet-controls">
+    <div class="container sheet-controls__inner">
+      <div class="search">
+        <svg class="search__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input id="sheetSearch" class="search__input" type="search" placeholder="コマンド名・説明・オプションで検索（例: grep、ファイル、-r）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="コマンドを検索">
+      </div>
+      <div class="row" style="justify-content: space-between;">
+        <div class="sheet-filters" id="sheetFilters" role="group" aria-label="カテゴリで絞り込み"></div>
+        <div class="sheet-meta" id="sheetMeta">読み込み中…</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="container">
+    <div class="sheet-grid" id="sheetGrid"></div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__credits">
+      <div>本サイトは <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> に着想を得た日本語の学習教材です。問題文・シナリオ・解説はすべて本サイト独自に新規作成しています。</div>
+      <div style="margin-top: var(--s-2);">© Shell.</div>
+    </div>
+    <div class="footer__nav">
+      <a href="cheatsheet.html">Linux コマンドチートシート</a>
+      <a href="settings.html">進捗の保存・読み込み</a>
+      <a href="about.html">このサイトについて</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/data/commands.js"></script>
+<script src="assets/js/progress.js"></script>
+<script src="assets/js/app.js"></script>
+<script src="assets/js/copy.js"></script>
+<script src="assets/js/search.js"></script>
+
+</body>
+</html>

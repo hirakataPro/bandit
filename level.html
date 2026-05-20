@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>Level — Shell</title>
+<meta name="description" content="ブラウザの仮想ターミナルでLinuxコマンドを学ぶレベルページ。">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+<link rel="stylesheet" href="assets/css/terminal.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__brand-mark">❯</span>
+      <span>Shell</span>
+    </a>
+    <nav class="nav__links" aria-label="グローバル">
+      <a class="nav__link" data-page="index" href="index.html">ホーム</a>
+      <a class="nav__link" data-page="cheatsheet" href="cheatsheet.html">チートシート</a>
+      <a class="nav__link" data-page="settings" href="settings.html">設定</a>
+      <a class="nav__link" data-page="about" href="about.html">このサイトについて</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="section section--snug">
+    <div class="container container--wide">
+      <header class="level-header">
+        <div class="level-header__num" id="lvNum">LEVEL</div>
+        <h1 class="level-header__title" id="lvTitle">読み込み中…</h1>
+        <p class="level-header__theme" id="lvTheme"></p>
+      </header>
+
+      <div data-storage-banner></div>
+
+      <div class="level-stack" id="levelStack"></div>
+
+      <nav class="level-nav" aria-label="前後のレベル">
+        <a class="btn btn--secondary level-nav__btn" id="lvPrev" href="#">‹ 前のレベル</a>
+        <a class="btn btn--secondary level-nav__btn" id="lvNext" href="#">次のレベル ›</a>
+      </nav>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__credits">
+      <div>本サイトは <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> に着想を得た日本語の学習教材です。問題文・シナリオ・解説はすべて本サイト独自に新規作成しています。</div>
+      <div style="margin-top: var(--s-2);">© Shell.</div>
+    </div>
+    <div class="footer__nav">
+      <a href="cheatsheet.html">Linux コマンドチートシート</a>
+      <a href="settings.html">進捗の保存・読み込み</a>
+      <a href="about.html">このサイトについて</a>
+    </div>
+  </div>
+</footer>
+
+<!-- データ -->
+<script src="assets/data/levels.js"></script>
+<script src="assets/data/level-data.js"></script>
+
+<!-- 共通 -->
+<script src="assets/js/progress.js"></script>
+<script src="assets/js/app.js"></script>
+
+<!-- 仮想ターミナル -->
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+<script src="assets/js/terminal/ui.js"></script>
+
+<!-- ページロジック -->
+<script src="assets/js/level.js"></script>
+
+</body>
+</html>

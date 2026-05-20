@@ -1,0 +1,170 @@
+/* =========================================================
+   Base — reset, typography, layout primitives
+   ========================================================= */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+  background: var(--bg-0);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: var(--lh-normal);
+  color: var(--fg-0);
+  background: var(--bg-0);
+  min-height: 100dvh;
+  letter-spacing: var(--track-body);
+}
+
+img, svg, video, canvas { display: block; max-width: 100%; }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease);
+}
+a:hover { color: var(--accent-hover); }
+a:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(41, 151, 255, 0.5);
+  border-radius: var(--r-1);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: var(--track-h);
+  line-height: var(--lh-snug);
+  color: var(--fg-0);
+}
+
+p { margin: 0; }
+
+ul, ol { margin: 0; padding: 0; list-style: none; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: rgba(41, 151, 255, 0.35);
+  color: var(--fg-0);
+}
+
+/* ---------- Layout ---------- */
+
+.container {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 var(--s-5);
+}
+.container--narrow { max-width: var(--container-narrow); }
+.container--wide { max-width: var(--container-wide); }
+
+@media (min-width: 768px) {
+  .container { padding: 0 var(--s-7); }
+}
+
+.section {
+  padding: var(--s-9) 0;
+}
+@media (min-width: 768px) {
+  .section { padding: var(--s-10) 0; }
+}
+
+.section--snug { padding: var(--s-8) 0; }
+.section--tight { padding: var(--s-7) 0; }
+
+/* ---------- Typography utilities ---------- */
+
+.eyebrow {
+  font-size: var(--t-small);
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.display {
+  font-size: var(--t-display);
+  font-weight: 600;
+  letter-spacing: var(--track-display);
+  line-height: var(--lh-tight);
+}
+
+.h1 { font-size: var(--t-h1); }
+.h2 { font-size: var(--t-h2); }
+.h3 { font-size: var(--t-h3); }
+.h4 { font-size: var(--t-h4); }
+
+.lead {
+  font-size: clamp(20px, 2.2vw, 24px);
+  color: var(--fg-1);
+  line-height: var(--lh-loose);
+}
+
+.muted { color: var(--fg-1); }
+.dim { color: var(--fg-2); }
+
+.gradient-text {
+  background: linear-gradient(180deg, #ffffff 0%, #aaaaaf 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------- Grid helpers ---------- */
+
+.grid {
+  display: grid;
+  gap: var(--s-5);
+}
+
+.grid--cards {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--s-4);
+}
+
+@media (min-width: 768px) {
+  .grid--cards { gap: var(--s-5); }
+}
+
+.stack > * + * { margin-top: var(--s-4); }
+.stack-lg > * + * { margin-top: var(--s-6); }
+.stack-xl > * + * { margin-top: var(--s-7); }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+/* ---------- Visually hidden (a11y) ---------- */
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}

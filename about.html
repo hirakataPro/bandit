@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>このサイトについて — Shell</title>
+<meta name="description" content="Shell（ターミナル学習サイト）の目的、ライセンス、クレジットについて。">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__brand-mark">❯</span>
+      <span>Shell</span>
+    </a>
+    <nav class="nav__links" aria-label="グローバル">
+      <a class="nav__link" data-page="index" href="index.html">ホーム</a>
+      <a class="nav__link" data-page="cheatsheet" href="cheatsheet.html">チートシート</a>
+      <a class="nav__link" data-page="settings" href="settings.html">設定</a>
+      <a class="nav__link" data-page="about" href="about.html">このサイトについて</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="section">
+    <div class="container container--narrow">
+      <div class="eyebrow">About</div>
+      <h1 class="h1" style="margin-top: var(--s-2);">このサイトについて</h1>
+
+      <article class="about-prose stack-lg" style="margin-top: var(--s-7);">
+        <p>Shell は、ターミナルを初めて触る方が、コマンドを使ってサーバーを探索する感覚を身につけるための日本語学習サイトです。ブラウザの中に小さな仮想サーバー（35のレベル）を用意し、実際にコマンドを打ち込みながら答えを探していく形式で進みます。</p>
+
+        <h2>このサイトのねらい</h2>
+        <p>サーバーや Linux に初めて触れる方が、教科書だけではなかなか身につかない「自分の手でターミナルを動かす感覚」を、安全な環境で体験できるようにすることを目指しています。間違えても何も壊れません。気が済むまで試してみてください。</p>
+
+        <h2>OverTheWire Bandit について</h2>
+        <p>本サイトは、海外で長年親しまれている <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> という学習用ウォーゲームに着想を得ています。各レベルが扱う「学べる技術テーマ」を参考にしていますが、本サイトに掲載されている問題文・シナリオ・解説・ヒント・サンプルは、すべて Shell が独自に新規作成したオリジナルコンテンツです。</p>
+        <p>本サイトは Bandit 原文の翻訳でも翻案でもありません。実際にネットワーク越しに本物のサーバーへ接続して挑戦してみたい方は、ぜひ原典の OverTheWire Bandit をご利用ください。本物のサーバーで挑戦すると、また違った学びがあります。</p>
+
+        <h2>ライセンスとクレジット</h2>
+        <ul>
+          <li>原典 OverTheWire Bandit は <code>CC BY-NC-SA 4.0</code> の下で公開されています。</li>
+          <li>本サイトのコンテンツは独自制作物であり、上記ライセンスの派生物ではありません。</li>
+          <li>営利企業の社員教育用途で運用されています。</li>
+        </ul>
+
+        <h2>進捗の保存について</h2>
+        <p>あなたの学習進捗は、ご利用のブラウザの中（localStorage）に自動的に保存されます。サーバーには何も送信しません。端末を変えるとき、ブラウザの履歴を消すときなどは、設定ページの「進捗をエクスポート」機能で JSON ファイルとしてバックアップしておくと安心です。</p>
+        <p>プライベートブラウジングなどで自動保存が無効な場合は、画面上部に通知が出ます。</p>
+
+        <h2>免責</h2>
+        <p>本サイトのコマンド実行はすべて、ブラウザの中だけで動作する仮想ターミナル上で行われます。あなたの実際のコンピュータには影響しません。あくまで学習用のシミュレーションであり、実環境の Linux と挙動が異なる部分もあります。本物の感覚は、ぜひ実機やクラウド上の Linux サーバーで身につけてください。</p>
+
+        <div style="margin-top: var(--s-7); display: flex; gap: var(--s-3); flex-wrap: wrap;">
+          <a class="btn btn--primary" href="level.html?l=0">最初のレベルから始める</a>
+          <a class="btn btn--ghost" href="cheatsheet.html">チートシートを見る</a>
+        </div>
+      </article>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__credits">
+      <div>本サイトは <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> に着想を得た日本語の学習教材です。問題文・シナリオ・解説はすべて本サイト独自に新規作成しています。</div>
+      <div style="margin-top: var(--s-2);">© Shell.</div>
+    </div>
+    <div class="footer__nav">
+      <a href="cheatsheet.html">Linux コマンドチートシート</a>
+      <a href="settings.html">進捗の保存・読み込み</a>
+      <a href="about.html">このサイトについて</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/progress.js"></script>
+<script src="assets/js/app.js"></script>
+
+</body>
+</html>

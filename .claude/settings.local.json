@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($base = \"g:\\\\マイドライブ\\\\サポーター\\\\近藤\\\\bandit\"; $dirs = @\\(\"assets\\\\css\",\"assets\\\\js\\\\terminal\\\\commands\",\"assets\\\\data\\\\filesystems\",\"assets\\\\fonts\"\\); foreach \\($d in $dirs\\) { New-Item -ItemType Directory -Force -Path \\(Join-Path $base $d\\) | Out-Null }; Get-ChildItem -Recurse -Directory $base | Select-Object FullName)",
+      "PowerShell($base = \"g:\\\\マイドライブ\\\\サポーター\\\\近藤\\\\bandit\"; Get-ChildItem -Recurse -Directory $base | ForEach-Object { $_.FullName.Replace\\($base, \".\"\\) })",
+      "PowerShell($ErrorActionPreference = 'Continue'; $base = \"g:\\\\マイドライブ\\\\サポーター\\\\近藤\\\\bandit\"; $jsFiles = @\\(\"assets\\\\js\\\\progress.js\",\"assets\\\\js\\\\app.js\",\"assets\\\\js\\\\copy.js\",\"assets\\\\js\\\\search.js\",\"assets\\\\data\\\\levels.js\",\"assets\\\\data\\\\commands.js\"\\); $node = Get-Command node -ErrorAction SilentlyContinue; if \\($node\\) { foreach \\($f in $jsFiles\\) { $p = Join-Path $base $f; $r = & node --check $p 2>&1; if \\($LASTEXITCODE -eq 0\\) { \"OK   $f\" } else { \"FAIL $f`n$r\" } } } else { \"node not available - skip syntax check\" })",
+      "PowerShell($plain = \"The password for the next level is:`ndecode-the-armor-and-read-clearly-10`n\"; $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($plain\\); $b64 = [Convert]::ToBase64String\\($bytes\\); Write-Output \"PLAIN bytes: $\\($bytes.Length\\)\"; Write-Output \"BASE64: $b64\")",
+      "PowerShell($b64 = \"VGhlIHBhc3N3b3JkIGZvciB0aGUgbmV4dCBsZXZlbCBpczoKZGVjb2RlLXRoZS1hcm1vci1hbmQtcmVhZC1jbGVhcmx5LTEwCg==\"; $decoded = [Text.Encoding]::UTF8.GetString\\([Convert]::FromBase64String\\($b64\\)\\); Write-Output \"DECODED:\"; Write-Output $decoded; Write-Output \"---\"; Write-Output \"Contains target password? $\\($decoded.Contains\\('decode-the-armor-and-read-clearly-10'\\)\\)\")",
+      "PowerShell($f = \"g:\\\\マイドライブ\\\\サポーター\\\\近藤\\\\bandit\\\\assets\\\\data\\\\level-data.js\"; $text = Get-Content $f -Raw; $openBraces = \\([regex]::Matches\\($text, \"\\\\{\"\\)\\).Count; $closeBraces = \\([regex]::Matches\\($text, \"\\\\}\"\\)\\).Count; Write-Output \"File size: $\\($text.Length\\) chars\"; Write-Output \"Lines: $\\(\\(Get-Content $f\\).Count\\)\"; Write-Output \"Open braces: $openBraces, Close braces: $closeBraces \\(must match\\)\"; Write-Output \"\"; Write-Output \"--- Last 10 lines ---\"; Get-Content $f -Tail 10)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

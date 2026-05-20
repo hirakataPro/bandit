@@ -1,0 +1,109 @@
+/* =========================================================
+   Design Tokens — Apple-inspired dark theme
+   ========================================================= */
+
+:root {
+  /* ---------- Surface ---------- */
+  --bg-0: #000000;                       /* base background */
+  --bg-1: #0a0a0c;                       /* sections */
+  --bg-2: #131316;                       /* cards */
+  --bg-3: #1c1c1f;                       /* elevated / hover */
+  --bg-4: #2a2a2e;                       /* code block */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  /* ---------- Text ---------- */
+  --fg-0: #f5f5f7;                       /* primary */
+  --fg-1: #a1a1a6;                       /* secondary */
+  --fg-2: #6e6e73;                       /* tertiary */
+  --fg-on-accent: #ffffff;
+
+  /* ---------- Accent (Apple system colors, dark) ---------- */
+  --accent: #2997ff;
+  --accent-hover: #4aa8ff;
+  --accent-press: #1a85e0;
+  --accent-warm: #ff9f0a;
+  --accent-success: #30d158;
+  --accent-danger: #ff453a;
+  --accent-purple: #bf5af2;
+
+  /* ---------- Typography ---------- */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
+    "Meiryo", "Noto Sans JP", system-ui, sans-serif;
+  --font-mono:
+    "SF Mono", "JetBrains Mono", "Menlo", "Monaco", "Consolas",
+    "Source Han Code JP", monospace;
+
+  /* type scale */
+  --t-display: clamp(48px, 8vw, 96px);
+  --t-h1: clamp(36px, 5.2vw, 64px);
+  --t-h2: clamp(28px, 3.6vw, 44px);
+  --t-h3: clamp(22px, 2.4vw, 28px);
+  --t-h4: 20px;
+  --t-body: 17px;
+  --t-small: 14px;
+  --t-xs: 12px;
+
+  /* line-height */
+  --lh-tight: 1.08;
+  --lh-snug: 1.25;
+  --lh-normal: 1.55;
+  --lh-loose: 1.7;
+
+  /* tracking */
+  --track-display: -0.022em;
+  --track-h: -0.012em;
+  --track-body: -0.003em;
+
+  /* ---------- Spacing (4-base scale) ---------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+  --s-10: 128px;
+
+  /* ---------- Radii ---------- */
+  --r-1: 6px;
+  --r-2: 12px;
+  --r-3: 18px;
+  --r-4: 24px;
+  --r-pill: 980px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 4px rgba(41, 151, 255, 0.25);
+
+  /* ---------- Motion ---------- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 160ms;
+  --dur: 240ms;
+  --dur-slow: 360ms;
+
+  /* ---------- Layout ---------- */
+  --container: 1200px;
+  --container-narrow: 880px;
+  --container-wide: 1440px;
+
+  /* ---------- Z-index ---------- */
+  --z-nav: 100;
+  --z-banner: 90;
+  --z-modal: 1000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

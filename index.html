@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>Shell — ターミナルで、Linuxを身につける。</title>
+<meta name="description" content="ブラウザの中に作られた小さなサーバーで、ターミナルとLinuxコマンドを最初から学べる日本語の学習サイト。">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__brand-mark">❯</span>
+      <span>Shell</span>
+    </a>
+    <nav class="nav__links" aria-label="グローバル">
+      <a class="nav__link" data-page="index" href="index.html">ホーム</a>
+      <a class="nav__link" data-page="cheatsheet" href="cheatsheet.html">チートシート</a>
+      <a class="nav__link" data-page="settings" href="settings.html">設定</a>
+      <a class="nav__link" data-page="about" href="about.html">このサイトについて</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="hero__inner">
+      <div class="hero__eyebrow eyebrow">35のレベルで学ぶ Linux 入門</div>
+      <h1 class="hero__title gradient-text">ターミナルで、<br>Linuxを身につける。</h1>
+      <p class="hero__subtitle">ブラウザの中に小さなサーバーを用意しました。<br>コマンドを打って、ファイルを探して、次のステージへ進みましょう。</p>
+      <div class="hero__actions">
+        <a class="btn btn--primary btn--lg" id="cta-start" href="level.html?l=0">最初のレベルを始める</a>
+        <a class="btn btn--ghost btn--lg" href="cheatsheet.html">チートシートを見る</a>
+      </div>
+    </div>
+  </section>
+
+  <div class="container container--narrow" data-storage-banner></div>
+
+  <section class="section section--snug">
+    <div class="container container--narrow">
+      <div class="index-progress" id="indexProgress">
+        <div class="index-progress__text">
+          <div class="index-progress__title">あなたの進捗</div>
+          <div class="index-progress__sub" id="progressSub">読み込み中…</div>
+        </div>
+        <div class="progress" aria-hidden="true">
+          <div class="progress__bar">
+            <div class="progress__fill" id="progressFill" style="width: 0%"></div>
+          </div>
+          <div class="progress__label" id="progressLabel">0 / 35</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight">
+    <div class="container">
+      <div class="row" style="justify-content: space-between; margin-bottom: var(--s-5);">
+        <div>
+          <div class="eyebrow">Levels</div>
+          <h2 class="h2" style="margin-top: var(--s-2);">レベル一覧</h2>
+        </div>
+        <div class="muted" style="font-size: var(--t-small);">クリアすると緑のチェックがつきます</div>
+      </div>
+      <div class="grid grid--cards" id="levelGrid"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__credits">
+      <div>本サイトは <a href="https://overthewire.org/wargames/bandit/" target="_blank" rel="noopener noreferrer">OverTheWire Bandit</a> に着想を得た日本語の学習教材です。問題文・シナリオ・解説はすべて本サイト独自に新規作成しています。</div>
+      <div style="margin-top: var(--s-2);">© Shell. 営利企業の社員教育用途に作成。</div>
+    </div>
+    <div class="footer__nav">
+      <a href="cheatsheet.html">Linux コマンドチートシート</a>
+      <a href="settings.html">進捗の保存・読み込み</a>
+      <a href="about.html">このサイトについて</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/data/levels.js"></script>
+<script src="assets/js/progress.js"></script>
+<script src="assets/js/app.js"></script>
+<script src="assets/js/copy.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  function render() {
+    const grid = document.getElementById("levelGrid");
+    if (!grid || !window.LEVELS) return;
+
+    const total = Progress.getTotalLevels();
+    const cleared = Progress.getClearedCount();
+    const lastLevel = Progress.state.lastLevel;
+
+    // 進捗バー
+    document.getElementById("progressFill").style.width = (cleared / total * 100).toFixed(1) + "%";
+    document.getElementById("progressLabel").textContent = cleared + " / " + total;
+    const sub = document.getElementById("progressSub");
+    if (cleared === 0) {
+      sub.textContent = "Level 0 から始めましょう。";
+    } else if (cleared >= total) {
+      sub.textContent = "全レベルクリアしました。お疲れさまでした。";
+    } else {
+      sub.textContent = "次は Level " + lastLevel + " です。";
+    }
+
+    // CTA リンクの切替
+    const cta = document.getElementById("cta-start");
+    if (cta) {
+      if (cleared > 0 && cleared < total) {
+        cta.textContent = "Level " + lastLevel + " から続きを始める";
+        cta.href = "level.html?l=" + lastLevel;
+      }
+    }
+
+    // カード生成
+    grid.innerHTML = "";
+    for (let i = 0; i < total; i++) {
+      const lv = LEVELS[i];
+      if (!lv) continue;
+      const a = document.createElement("a");
+      a.className = "level-card";
+      a.href = "level.html?l=" + i;
+      a.dataset.cleared = Progress.isCleared(i) ? "true" : "false";
+      a.innerHTML = `
+        <span class="level-card__badge" aria-label="クリア済み">✓</span>
+        <div class="level-card__num">LEVEL ${String(i).padStart(2, "0")}</div>
+        <div class="level-card__title">${lv.title}</div>
+        <div class="level-card__theme">${lv.theme}</div>
+      `;
+      grid.appendChild(a);
+    }
+
+    // hover 効果再バインド
+    if (window.App && typeof window.App.rescan === "function") window.App.rescan();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", render);
+  } else {
+    render();
+  }
+  Progress.onChange(render);
+})();
+</script>
+
+</body>
+</html>
