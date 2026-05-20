@@ -52,6 +52,14 @@
     this.cwd = (spec && spec.cwd) || this.home;
     this.hostname = (spec && spec.hostname) || "shell";
 
+    // 仮想ネットワーク: ポート番号 → { tls, handler(input)→output, banner? }
+    // handler は async でも可。レベル定義から spec.ports で渡す。
+    this.ports = Object.assign({}, (spec && spec.ports) || {});
+
+    // SSH 認証情報: "user@host" → { authorizedKey, onAuth(ctx)→string }
+    // ssh -i がこのキーを参照する。Lv13 等で使う。
+    this.sshKeys = Object.assign({}, (spec && spec.sshKeys) || {});
+
     this.root = makeDir({ name: "", mode: 0o755 });
 
     // 必須ディレクトリ

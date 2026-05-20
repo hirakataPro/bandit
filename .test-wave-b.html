@@ -1,0 +1,192 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_B_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function eq(a, b, m) {
+    if (a === b) return true;
+    throw new Error((m || "mismatch") +
+      "\n  expected: " + JSON.stringify(b).slice(0, 200) +
+      "\n  actual:   " + JSON.stringify(a).slice(0, 200));
+  }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 300)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave B integration test (less / vim) ===");
+
+  const spec = {
+    user: "bandit25", hostname: "training-server",
+    home: "/home/bandit25", cwd: "/home/bandit25",
+    files: {
+      "/home/bandit25/welcome.txt": { type: "file", owner: "bandit25", group: "bandit25", mode: "0644",
+        content: "Welcome to Shell.\nこれはページャ用テキスト。\n" },
+      "/home/bandit26/password": { type: "file", owner: "bandit26", group: "bandit26", mode: "0644",
+        content: "secret-pw-26\n" }
+    }
+  };
+
+  function newShell() {
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("less: ファイル表示後に interactive モードに入る", async () => {
+    const sh = newShell();
+    const r = await sh.run("less welcome.txt");
+    contains(r.output, "Welcome to Shell.", "ファイル内容");
+    contains(r.output, "welcome.txt", "バナー");
+    if (!sh._interactive) throw new Error("_interactive がセットされていない");
+    eq(sh._interactive.prompt, ":");
+    eq(sh._interactive.name, "less");
+  });
+
+  await test("less: q で終了して通常モードに戻る", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("q");
+    eq(r.exit, true);
+    if (sh._interactive) throw new Error("終了後も _interactive が残っている");
+  });
+
+  await test("less: 空 Enter で終了", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("");
+    eq(r.exit, true);
+  });
+
+  await test("less: !cmd でシェル脱出してコマンドを実行", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("!cat /home/bandit26/password");
+    eq(r.exit, false, "less から抜けないはず");
+    contains(r.output, "secret-pw-26", "脱出コマンドの出力");
+    if (!sh._interactive) throw new Error("!cmd 後も less に戻るべき");
+  });
+
+  await test("less: !cmd の後にもう一度入力可能", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    await sh.continueInteractive("!whoami");
+    const r = await sh.continueInteractive("q");
+    eq(r.exit, true);
+  });
+
+  await test("less: 存在しないファイルでエラー", async () => {
+    const sh = newShell();
+    const r = await sh.run("less /no/such/file");
+    contains(r.output, "less:", "エラーメッセージ");
+    if (sh._interactive) throw new Error("失敗時に対話モードに入っていない");
+  });
+
+  await test("more: less と同じ挙動", async () => {
+    const sh = newShell();
+    const r = await sh.run("more welcome.txt");
+    contains(r.output, "Welcome to Shell.");
+    if (!sh._interactive) throw new Error("more でも対話モードに入るべき");
+    await sh.continueInteractive("q");
+  });
+
+  await test("vim: ファイル表示 + 対話モード", async () => {
+    const sh = newShell();
+    const r = await sh.run("vim welcome.txt");
+    contains(r.output, "Welcome to Shell.", "ファイル内容");
+    contains(r.output, "VIM", "バナー");
+    if (!sh._interactive) throw new Error("対話モード未起動");
+    eq(sh._interactive.name, "vim");
+  });
+
+  await test("vim: :q で終了", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":q");
+    eq(r.exit, true);
+    if (sh._interactive) throw new Error("終了していない");
+  });
+
+  await test("vim: :!cmd でシェル実行", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":!cat /home/bandit26/password");
+    eq(r.exit, false);
+    contains(r.output, "secret-pw-26");
+    if (!sh._interactive) throw new Error("vim に戻るべき");
+  });
+
+  await test("vim: :shell で通常シェルに脱出 (exit する)", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":shell");
+    eq(r.exit, true, "vim を抜けるべき");
+    contains(r.output, "脱出します");
+    if (sh._interactive) throw new Error("vim を抜けた後は通常モード");
+  });
+
+  await test("vim: :set shell= で起動シェル変更", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":set shell=/bin/sh");
+    eq(r.exit, false);
+    contains(r.output, "/bin/sh");
+  });
+
+  await test("vim: 新規ファイル (ENOENT) で空編集として開く", async () => {
+    const sh = newShell();
+    const r = await sh.run("vim newfile.txt");
+    if (!sh._interactive) throw new Error("対話モードに入っていない");
+    await sh.continueInteractive(":q");
+  });
+
+  await test("vi: vim のエイリアス", async () => {
+    const sh = newShell();
+    const r = await sh.run("vi welcome.txt");
+    if (!sh._interactive) throw new Error("vi も対話モードに入るべき");
+    eq(sh._interactive.name, "vim");
+    await sh.continueInteractive(":q");
+  });
+
+  await test("Bandit Lv25 風: less から !cat で別パスのファイルを読む", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("!cat /home/bandit26/password");
+    contains(r.output, "secret-pw-26");
+    await sh.continueInteractive("q");
+    // 通常シェルに戻っているか
+    const r2 = await sh.run("whoami");
+    contains(r2.output, "bandit25");
+  });
+
+  await test("Bandit Lv26 風: vim の :!cmd で他人のパスワードを取得", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":!cat /home/bandit26/password");
+    contains(r.output, "secret-pw-26");
+    await sh.continueInteractive(":q");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_B_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

@@ -145,7 +145,14 @@
       }
       if (e.key === "ArrowUp")   { e.preventDefault(); self._historyBack(); return; }
       if (e.key === "ArrowDown") { e.preventDefault(); self._historyForward(); return; }
-      if (e.key === "Tab")       { e.preventDefault(); self._tabComplete(); return; }
+      // 対話モード中 (less/vim 等) は Tab 補完を無効化する。シェルコマンド名を
+      // 補完しに行くと less の :prompt で意図しない動作になるため。
+      if (e.key === "Tab")       {
+        e.preventDefault();
+        if (self.shell._interactive) return;
+        self._tabComplete();
+        return;
+      }
       if (e.key === "l" && e.ctrlKey) { e.preventDefault(); self.clear(); return; }
       if (e.key === "u" && e.ctrlKey) { e.preventDefault(); self.inputEl.textContent = ""; return; }
       if (e.key === "c" && e.ctrlKey) {
@@ -187,6 +194,11 @@
 
   // 色付きプロンプトを HTML として生成
   Terminal.prototype._renderPromptHTML = function () {
+    // 対話モード中 (less / vim 等) は専用プロンプトを表示
+    if (this.shell._interactive) {
+      const p = this.shell._interactive.prompt || ":";
+      return '<span class="term__p-sym">' + escapeHtml(p) + "</span>";
+    }
     const v = this.shell.vfs;
     const u = v.user;
     const h = v.hostname;
@@ -203,6 +215,7 @@
 
   // テキスト版（コマンドエコー時に出力に書き込む用）
   Terminal.prototype._renderPromptString = function () {
+    if (this.shell._interactive) return this.shell._interactive.prompt || ":";
     return this.shell.prompt();
   };
 
@@ -255,6 +268,28 @@
     this.inputEl.textContent = "";
     this.histIndex = -1;
     this.histDraft = "";
+
+    // 対話モード中: 通常コマンドではなく less/vim 等のハンドラに流す
+    if (this.shell._interactive) {
+      this.busy = true;
+      this.host.classList.add("is-busy");
+      let result;
+      try {
+        result = await this.shell.continueInteractive(trimmed);
+      } catch (e) {
+        result = { output: "interactive: 内部エラー: " + (e && e.message ? e.message : String(e)) + "\n", exit: true };
+        this.shell._interactive = null;
+      }
+      if (result && result.output) this.print(result.output);
+      this.busy = false;
+      this.host.classList.remove("is-busy");
+      if (typeof this.onCommand === "function") {
+        try { this.onCommand(trimmed, { exitCode: 0, output: (result && result.output) || "", interactive: !!this.shell._interactive }); }
+        catch (e) { console.error(e); }
+      }
+      this._renderPrompt();
+      return;
+    }
 
     if (!trimmed.trim()) {
       this._renderPrompt();

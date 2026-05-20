@@ -27,6 +27,9 @@
     this.commands = Object.create(null);
     this.aliases = Object.create(null);
     this.history = [];
+    // 対話モード (less/vim 等): { handler, prompt, name } または null
+    // handler は async (line, ctx) → { output, exit } を返す。
+    this._interactive = null;
   }
 
   Shell.prototype.register = function (name, cmd) {
@@ -302,6 +305,28 @@
     if (cwd === this.vfs.home) cwd = "~";
     else if (cwd.startsWith(this.vfs.home + "/")) cwd = "~" + cwd.slice(this.vfs.home.length);
     return u + "@" + h + ":" + cwd + "$ ";
+  };
+
+  // 対話モード継続: less/vim の入力 1 行を処理する
+  Shell.prototype.continueInteractive = async function (line) {
+    if (!this._interactive) return { output: "", exit: true };
+    const handler = this._interactive.handler;
+    const ctx = {
+      shell: this,
+      vfs: this.vfs,
+      env: this.env,
+      args: [],
+      stdin: "",
+      isTTY: true
+    };
+    let result;
+    try {
+      result = await handler(String(line), ctx);
+    } catch (e) {
+      result = { output: "interactive: 内部エラー: " + (e && e.message ? e.message : String(e)) + "\n", exit: true };
+    }
+    if (result && result.exit) this._interactive = null;
+    return result || { output: "", exit: true };
   };
 
   window.Shell = Shell;

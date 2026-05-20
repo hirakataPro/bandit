@@ -1,0 +1,182 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_A_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function eq(a, b, m) {
+    if (a === b) return true;
+    throw new Error((m || "mismatch") +
+      "\n  expected: " + JSON.stringify(b).slice(0, 200) +
+      "\n  actual:   " + JSON.stringify(a).slice(0, 200));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave A integration test (browser) ===");
+
+  // VFS と Shell をセットアップ
+  const spec = {
+    user: "bandit12", hostname: "training-server",
+    home: "/home/bandit12", cwd: "/home/bandit12",
+    files: {
+      "/home/bandit12/secret.txt": { type: "file", owner: "bandit12", group: "bandit12", mode: "0644", content: "the answer is 42\n" }
+    }
+  };
+
+  function newShell() {
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("gzip → file 判定 → gunzip ラウンドトリップ", async () => {
+    const sh = newShell();
+    let r = await sh.run("gzip secret.txt");
+    eq(r.exitCode, 0, "gzip exit");
+    r = await sh.run("file secret.txt.gz");
+    if (r.output.indexOf("gzip compressed data") < 0) throw new Error("file output: " + r.output);
+    r = await sh.run("gunzip secret.txt.gz");
+    eq(r.exitCode, 0, "gunzip exit");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n", "復元内容");
+  });
+
+  await test("bzip2 → file → bunzip2", async () => {
+    const sh = newShell();
+    await sh.run("bzip2 secret.txt");
+    let r = await sh.run("file secret.txt.bz2");
+    if (r.output.indexOf("bzip2 compressed data") < 0) throw new Error("file: " + r.output);
+    await sh.run("bunzip2 secret.txt.bz2");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n");
+  });
+
+  await test("xz → file → unxz", async () => {
+    const sh = newShell();
+    await sh.run("xz secret.txt");
+    let r = await sh.run("file secret.txt.xz");
+    if (r.output.indexOf("XZ compressed data") < 0) throw new Error("file: " + r.output);
+    await sh.run("unxz secret.txt.xz");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n");
+  });
+
+  await test("zcat / bzcat / xzcat", async () => {
+    const sh = newShell();
+    await sh.run("cp secret.txt a.txt");
+    await sh.run("cp secret.txt b.txt");
+    await sh.run("cp secret.txt c.txt");
+    await sh.run("gzip a.txt");
+    await sh.run("bzip2 b.txt");
+    await sh.run("xz c.txt");
+    let r = await sh.run("zcat a.txt.gz");   eq(r.output, "the answer is 42\n", "zcat");
+    r = await sh.run("bzcat b.txt.bz2");      eq(r.output, "the answer is 42\n", "bzcat");
+    r = await sh.run("xzcat c.txt.xz");       eq(r.output, "the answer is 42\n", "xzcat");
+  });
+
+  await test("gzip -d / bzip2 -d / xz -d", async () => {
+    const sh = newShell();
+    await sh.run("gzip secret.txt");
+    await sh.run("gzip -d secret.txt.gz");
+    let r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n", "gzip -d");
+    await sh.run("bzip2 secret.txt");
+    await sh.run("bzip2 -d secret.txt.bz2");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n", "bzip2 -d");
+  });
+
+  await test("tar cf / tf / xf 単一ファイル", async () => {
+    const sh = newShell();
+    let r = await sh.run("tar cf archive.tar secret.txt");
+    eq(r.exitCode, 0, "tar cf");
+    r = await sh.run("file archive.tar");
+    if (r.output.indexOf("POSIX tar archive") < 0) throw new Error("file: " + r.output);
+    r = await sh.run("tar tf archive.tar");
+    eq(r.output, "secret.txt\n", "tf");
+    await sh.run("rm secret.txt");
+    await sh.run("tar xf archive.tar");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n", "xf");
+  });
+
+  await test("tar czf / xzf (gzip 付き)", async () => {
+    const sh = newShell();
+    let r = await sh.run("tar czf archive.tar.gz secret.txt");
+    eq(r.exitCode, 0, "tar czf");
+    r = await sh.run("file archive.tar.gz");
+    if (r.output.indexOf("gzip compressed data") < 0) throw new Error("file: " + r.output);
+    await sh.run("rm secret.txt");
+    r = await sh.run("tar xzf archive.tar.gz");
+    eq(r.exitCode, 0, "tar xzf");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n", "xzf 復元");
+  });
+
+  await test("tar cjf / xjf (bzip2 付き)", async () => {
+    const sh = newShell();
+    await sh.run("tar cjf archive.tar.bz2 secret.txt");
+    let r = await sh.run("file archive.tar.bz2");
+    if (r.output.indexOf("bzip2 compressed data") < 0) throw new Error("file: " + r.output);
+    await sh.run("rm secret.txt");
+    await sh.run("tar xjf archive.tar.bz2");
+    r = await sh.run("cat secret.txt");
+    eq(r.output, "the answer is 42\n");
+  });
+
+  await test("Bandit Lv12 風: xxd ハンドオフ + 多段展開", async () => {
+    // 事前: 元データ → gz → bz2 → tar → xz の入れ子。最終ファイルを xxd でテキスト化。
+    // 検証手順は xxd -r → file → 適切に展開 → さらに展開... を繰り返す。
+    const sh = newShell();
+    // テキスト → gz
+    await sh.run("echo 'final-password-here' > pw.txt");
+    let r = await sh.run("cat pw.txt"); eq(r.output, "final-password-here\n");
+    await sh.run("gzip pw.txt");                 // pw.txt.gz
+    await sh.run("mv pw.txt.gz layer1.bin");
+    await sh.run("bzip2 layer1.bin");            // layer1.bin.bz2
+    await sh.run("mv layer1.bin.bz2 layer2.bin");
+    await sh.run("tar cf layer2.tar layer2.bin"); // layer2.tar
+    await sh.run("rm layer2.bin");
+    await sh.run("xz layer2.tar");               // layer2.tar.xz
+    await sh.run("mv layer2.tar.xz puzzle.bin");
+
+    // 逆方向: file → unxz → file → tar xf → file → bunzip2 → file → gunzip → cat
+    r = await sh.run("file puzzle.bin");
+    if (r.output.indexOf("XZ compressed") < 0) throw new Error("step1: " + r.output);
+    await sh.run("mv puzzle.bin puzzle.xz");
+    await sh.run("unxz puzzle.xz");
+    r = await sh.run("file puzzle");
+    if (r.output.indexOf("POSIX tar") < 0) throw new Error("step2: " + r.output);
+    await sh.run("mv puzzle puzzle.tar");
+    await sh.run("tar xf puzzle.tar");
+    r = await sh.run("file layer2.bin");
+    if (r.output.indexOf("bzip2 compressed") < 0) throw new Error("step3: " + r.output);
+    await sh.run("mv layer2.bin layer2.bz2");
+    await sh.run("bunzip2 layer2.bz2");
+    r = await sh.run("file layer2");
+    if (r.output.indexOf("gzip compressed") < 0) throw new Error("step4: " + r.output);
+    await sh.run("mv layer2 layer2.gz");
+    await sh.run("gunzip layer2.gz");
+    r = await sh.run("cat layer2");
+    eq(r.output, "final-password-here\n", "最終復元");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_A_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

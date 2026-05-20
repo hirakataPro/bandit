@@ -71,6 +71,95 @@
     return name;
   }
 
+  // ---------- 圧縮 / アーカイブのマジック ----------
+  // 実コマンドのマジックバイトに合わせ、`file` が正しく判別できるようにする。
+  // 圧縮は擬似 (実圧縮はせずヘッダだけ被せる) だが、ヘキサダンプ・ワークフローが
+  // 本物の感覚で進められればよい。
+  const GZIP_MAGIC  = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03"; // 10B header
+  const BZIP2_MAGIC = "BZh91AY&SY";                                // 10B
+  const XZ_MAGIC    = "\xfd7zXZ\x00\x00";                          // 7B
+
+  // マジック検出は「マジック以降にも 1 バイト以上の本体がある」最小長を要求する。
+  // これがないと "\x1f\x8b" だけの 2 バイトファイルが isGzip=true になり、
+  // gunzip が無声に空文字を返してしまう (本物の gzip は header だけのものは無効データ扱い)。
+  function isGzip(s)  { return s.length >  GZIP_MAGIC.length  && s.charCodeAt(0) === 0x1f && s.charCodeAt(1) === 0x8b; }
+  function isBzip2(s) { return s.length >  BZIP2_MAGIC.length && /^BZh[1-9]/.test(s); }
+  // 実 xz のマジックは 6 バイト: FD 37 7A 58 5A 00
+  function isXz(s)    { return s.length >  XZ_MAGIC.length    && s.slice(0, 6) === "\xfd7zXZ\x00"; }
+  function isTar(s)   { return s.length >= 263                && s.slice(257, 262) === "ustar"; }
+
+  function gzipWrap(content)   { return GZIP_MAGIC + content; }
+  function bzip2Wrap(content)  { return BZIP2_MAGIC + content; }
+  function xzWrap(content)     { return XZ_MAGIC + content; }
+  function gzipUnwrap(content) { return isGzip(content)  ? content.slice(GZIP_MAGIC.length)  : null; }
+  function bzip2Unwrap(content){ return isBzip2(content) ? content.slice(BZIP2_MAGIC.length) : null; }
+  function xzUnwrap(content)   { return isXz(content)    ? content.slice(XZ_MAGIC.length)    : null; }
+
+  // tar: ustar 形式 (512バイト固定ヘッダ + 512アラインのコンテンツ + 末尾に2x512 0ブロック)
+  function tarHeader(name, mode, size) {
+    const buf = new Array(512).fill("\x00");
+    const setStr = (off, max, s) => {
+      for (let i = 0; i < Math.min(s.length, max); i++) buf[off + i] = s[i];
+    };
+    setStr(0, 100, name);
+    setStr(100, 8, mode.toString(8).padStart(7, "0") + "\x00");
+    setStr(108, 8, "0000000\x00");                    // uid
+    setStr(116, 8, "0000000\x00");                    // gid
+    setStr(124, 12, size.toString(8).padStart(11, "0") + "\x00");
+    setStr(136, 12, "00000000000\x00");               // mtime
+    for (let i = 0; i < 8; i++) buf[148 + i] = " ";   // checksum 領域は計算前は空白
+    buf[156] = "0";                                   // typeflag = regular file
+    setStr(257, 6, "ustar\x00");
+    setStr(263, 2, "00");
+    setStr(265, 32, "root\x00");                      // uname
+    setStr(297, 32, "root\x00");                      // gname
+    // checksum (空白を含めた合計)
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += buf[i].charCodeAt(0);
+    const ckStr = sum.toString(8).padStart(6, "0") + "\x00 ";
+    for (let i = 0; i < 8; i++) buf[148 + i] = ckStr[i];
+    return buf.join("");
+  }
+  function tarPad(s) {
+    const rem = s.length % 512;
+    return rem === 0 ? s : s + "\x00".repeat(512 - rem);
+  }
+  function tarPack(files) {
+    let out = "";
+    for (const f of files) {
+      out += tarHeader(f.name, f.mode == null ? 0o644 : f.mode, (f.content || "").length);
+      out += tarPad(f.content || "");
+    }
+    out += "\x00".repeat(1024);
+    return out;
+  }
+  function tarUnpack(data) {
+    const files = [];
+    let pos = 0;
+    while (pos + 512 <= data.length) {
+      const hdr = data.slice(pos, pos + 512);
+      // 全 0 ブロックは EOF マーカー
+      let allZero = true;
+      for (let i = 0; i < 512; i++) if (hdr.charCodeAt(i) !== 0) { allZero = false; break; }
+      if (allZero) break;
+      if (hdr.slice(257, 262) !== "ustar") break;
+      let nameEnd = 0;
+      while (nameEnd < 100 && hdr.charCodeAt(nameEnd) !== 0) nameEnd++;
+      const name = hdr.slice(0, nameEnd);
+      const modeStr = hdr.slice(100, 107).replace(/[\x00 ].*$/, "").trim();
+      const mode = parseInt(modeStr, 8) || 0o644;
+      const sizeStr = hdr.slice(124, 135).replace(/[\x00 ].*$/, "").trim();
+      const size = parseInt(sizeStr, 8) || 0;
+      const typeflag = hdr[156] || "0";
+      const content = data.slice(pos + 512, pos + 512 + size);
+      files.push({ name, mode, content, typeflag });
+      const blocks = Math.ceil(size / 512);
+      pos += 512 + blocks * 512;
+    }
+    return files;
+  }
+
+
   // ---------- 各コマンド ----------
   const COMMANDS = {
 
@@ -337,7 +426,12 @@
           else if (node.type === "symlink") kind = "symbolic link to " + (node.target || "?");
           else {
             const c = node.content || "";
+            // マジックバイトの優先判定 (圧縮 / アーカイブ)
             if (c.length === 0) kind = "empty";
+            else if (isGzip(c))  kind = "gzip compressed data";
+            else if (isBzip2(c)) kind = "bzip2 compressed data";
+            else if (isXz(c))    kind = "XZ compressed data";
+            else if (isTar(c))   kind = "POSIX tar archive";
             else if (/^\x7fELF/.test(c)) kind = "ELF binary";
             else if (/[\x00-\x08\x0E-\x1F]/.test(c.slice(0, 1024))) kind = "data";
             else {
@@ -856,6 +950,482 @@
       }
     },
 
+    gzip: {
+      description: "ファイルを gzip 圧縮 (.gz を作成)",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["d", "c", "k", "f", "q", "v"] });
+        if (flags.d) {
+          // gzip -d は gunzip と同じ。残りの flag を渡し直す。
+          const newArgs = [];
+          if (flags.c) newArgs.push("-c");
+          if (flags.k) newArgs.push("-k");
+          if (flags.f) newArgs.push("-f");
+          if (flags.q) newArgs.push("-q");
+          if (flags.v) newArgs.push("-v");
+          for (const p of positional) newArgs.push(p);
+          return ctx.shell.commands.gunzip.run(Object.assign({}, ctx, { args: newArgs }));
+        }
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          return ok(gzipWrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("gzip: " + p + ": " + r.error);
+          const wrapped = gzipWrap(r.content);
+          if (flags.c) { out += wrapped; continue; }
+          const dst = p + ".gz";
+          const w = ctx.vfs.writeFile(dst, wrapped);
+          if (w.error) return err("gzip: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    gunzip: {
+      description: "gzip 圧縮ファイルを展開",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["c", "k", "f", "q", "v", "t"] });
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isGzip(data)) return err("gunzip: 入力は gzip 形式ではありません");
+          return ok(gzipUnwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("gunzip: " + p + ": " + r.error);
+          if (!isGzip(r.content)) return err("gunzip: " + p + ": gzip 形式ではありません (file で確認してください)");
+          const inner = gzipUnwrap(r.content);
+          if (flags.c) { out += inner; continue; }
+          // 拡張子 .gz を取り除く。ない場合はそのまま .out
+          const dst = p.endsWith(".gz") ? p.slice(0, -3) : p + ".out";
+          const w = ctx.vfs.writeFile(dst, inner);
+          if (w.error) return err("gunzip: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    zcat: {
+      description: "gzip ファイルを展開して標準出力へ",
+      run(ctx) {
+        const { positional } = parseFlags(ctx.args, {});
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isGzip(data)) return err("zcat: 入力は gzip 形式ではありません");
+          return ok(gzipUnwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("zcat: " + p + ": " + r.error);
+          if (!isGzip(r.content)) return err("zcat: " + p + ": gzip 形式ではありません");
+          out += gzipUnwrap(r.content);
+        }
+        return ok(out);
+      }
+    },
+
+    bzip2: {
+      description: "ファイルを bzip2 圧縮 (.bz2 を作成)",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["d", "c", "k", "f", "q", "v"] });
+        if (flags.d) {
+          const newArgs = [];
+          if (flags.c) newArgs.push("-c");
+          if (flags.k) newArgs.push("-k");
+          if (flags.f) newArgs.push("-f");
+          if (flags.q) newArgs.push("-q");
+          if (flags.v) newArgs.push("-v");
+          for (const p of positional) newArgs.push(p);
+          return ctx.shell.commands.bunzip2.run(Object.assign({}, ctx, { args: newArgs }));
+        }
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          return ok(bzip2Wrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("bzip2: " + p + ": " + r.error);
+          const wrapped = bzip2Wrap(r.content);
+          if (flags.c) { out += wrapped; continue; }
+          const dst = p + ".bz2";
+          const w = ctx.vfs.writeFile(dst, wrapped);
+          if (w.error) return err("bzip2: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    bunzip2: {
+      description: "bzip2 圧縮ファイルを展開",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["c", "k", "f", "q", "v"] });
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isBzip2(data)) return err("bunzip2: 入力は bzip2 形式ではありません");
+          return ok(bzip2Unwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("bunzip2: " + p + ": " + r.error);
+          if (!isBzip2(r.content)) return err("bunzip2: " + p + ": bzip2 形式ではありません (file で確認してください)");
+          const inner = bzip2Unwrap(r.content);
+          if (flags.c) { out += inner; continue; }
+          const dst = p.endsWith(".bz2") ? p.slice(0, -4) : p + ".out";
+          const w = ctx.vfs.writeFile(dst, inner);
+          if (w.error) return err("bunzip2: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    bzcat: {
+      description: "bzip2 ファイルを展開して標準出力へ",
+      run(ctx) {
+        const { positional } = parseFlags(ctx.args, {});
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isBzip2(data)) return err("bzcat: 入力は bzip2 形式ではありません");
+          return ok(bzip2Unwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("bzcat: " + p + ": " + r.error);
+          if (!isBzip2(r.content)) return err("bzcat: " + p + ": bzip2 形式ではありません");
+          out += bzip2Unwrap(r.content);
+        }
+        return ok(out);
+      }
+    },
+
+    xz: {
+      description: "ファイルを xz 圧縮 (.xz を作成)",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["d", "c", "k", "f", "q", "v"] });
+        if (flags.d) {
+          const newArgs = [];
+          if (flags.c) newArgs.push("-c");
+          if (flags.k) newArgs.push("-k");
+          if (flags.f) newArgs.push("-f");
+          if (flags.q) newArgs.push("-q");
+          if (flags.v) newArgs.push("-v");
+          for (const p of positional) newArgs.push(p);
+          return ctx.shell.commands.unxz.run(Object.assign({}, ctx, { args: newArgs }));
+        }
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          return ok(xzWrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("xz: " + p + ": " + r.error);
+          const wrapped = xzWrap(r.content);
+          if (flags.c) { out += wrapped; continue; }
+          const dst = p + ".xz";
+          const w = ctx.vfs.writeFile(dst, wrapped);
+          if (w.error) return err("xz: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    unxz: {
+      description: "xz 圧縮ファイルを展開",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["c", "k", "f", "q", "v"] });
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isXz(data)) return err("unxz: 入力は xz 形式ではありません");
+          return ok(xzUnwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("unxz: " + p + ": " + r.error);
+          if (!isXz(r.content)) return err("unxz: " + p + ": xz 形式ではありません (file で確認してください)");
+          const inner = xzUnwrap(r.content);
+          if (flags.c) { out += inner; continue; }
+          const dst = p.endsWith(".xz") ? p.slice(0, -3) : p + ".out";
+          const w = ctx.vfs.writeFile(dst, inner);
+          if (w.error) return err("unxz: " + dst + ": " + w.error);
+          if (!flags.k) ctx.vfs.unlink(p);
+        }
+        return ok(out);
+      }
+    },
+
+    xzcat: {
+      description: "xz ファイルを展開して標準出力へ",
+      run(ctx) {
+        const { positional } = parseFlags(ctx.args, {});
+        if (!positional.length) {
+          const data = ctx.stdin || "";
+          if (!isXz(data)) return err("xzcat: 入力は xz 形式ではありません");
+          return ok(xzUnwrap(data));
+        }
+        let out = "";
+        for (const p of positional) {
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("xzcat: " + p + ": " + r.error);
+          if (!isXz(r.content)) return err("xzcat: " + p + ": xz 形式ではありません");
+          out += xzUnwrap(r.content);
+        }
+        return ok(out);
+      }
+    },
+
+    tar: {
+      description: "tar アーカイブの作成・展開・一覧",
+      // 主要モード: -cf (create), -xf (extract), -tf (list)
+      //   z (gzip), j (bzip2), J (xz) を組み合わせて -czf / -xzf 等
+      // f の次の引数はアーカイブファイル名。-C で展開先ディレクトリ。
+      run(ctx) {
+        // tar は POSIX 流の合字オプション (-xvf)。先頭 1 引数を分解して扱う。
+        const args = ctx.args.slice();
+        let modeChar = null; // c / x / t
+        let useZ = false, useJ = false, useJJ = false, hasF = false, verbose = false;
+        let archiveFile = null;
+        let chdir = null;
+        let positional = [];
+        let i = 0;
+        // 最初の引数がオプションを束ねたもの (先頭にハイフンがなくてもOK)
+        if (args.length && /^-?[cxtvfzjJC]+$/.test(args[0])) {
+          const s = args[0].replace(/^-/, "");
+          for (const ch of s) {
+            if (ch === "c" || ch === "x" || ch === "t") modeChar = ch;
+            else if (ch === "z") useZ = true;
+            else if (ch === "j") useJ = true;
+            else if (ch === "J") useJJ = true;
+            else if (ch === "v") verbose = true;
+            else if (ch === "f") hasF = true;
+            else if (ch === "C") { /* 後で chdir 引数を取る */ chdir = "_PENDING_"; }
+          }
+          i = 1;
+        }
+        // 残り引数: -C <dir>, -f <file>, それ以外はポジショナル
+        while (i < args.length) {
+          const a = args[i];
+          if (a === "-C") { chdir = args[++i]; i++; continue; }
+          if (a === "-f") { archiveFile = args[++i]; i++; continue; }
+          if (chdir === "_PENDING_") { chdir = a; i++; continue; }
+          if (hasF && archiveFile == null) { archiveFile = a; i++; continue; }
+          positional.push(a);
+          i++;
+        }
+        if (!modeChar) return err("tar: -c / -x / -t のいずれかが必要です");
+        if (!archiveFile) return err("tar: -f でアーカイブファイル名を指定してください");
+
+        function maybeWrap(data) {
+          if (useZ)  return gzipWrap(data);
+          if (useJ)  return bzip2Wrap(data);
+          if (useJJ) return xzWrap(data);
+          return data;
+        }
+        function maybeUnwrap(data) {
+          if (useZ) {
+            if (!isGzip(data)) return { error: "gzip 形式ではありません" };
+            return { data: gzipUnwrap(data) };
+          }
+          if (useJ) {
+            if (!isBzip2(data)) return { error: "bzip2 形式ではありません" };
+            return { data: bzip2Unwrap(data) };
+          }
+          if (useJJ) {
+            if (!isXz(data)) return { error: "xz 形式ではありません" };
+            return { data: xzUnwrap(data) };
+          }
+          return { data };
+        }
+
+        if (modeChar === "c") {
+          if (!positional.length) return err("tar: アーカイブする対象を指定してください");
+          // 各対象を 1 ファイルずつエントリ化 (ディレクトリ再帰は簡易対応)
+          const entries = [];
+          const baseDir = chdir ? ctx.vfs.absolutize(chdir) : ctx.vfs.cwd;
+          function relTo(absPath) {
+            // baseDir からの相対パス。なければそのまま basename。
+            if (absPath.startsWith(baseDir + "/")) return absPath.slice(baseDir.length + 1);
+            if (absPath === baseDir) return ".";
+            return pathBase(absPath);
+          }
+          for (const target of positional) {
+            // 入力は baseDir 起点で相対解釈する
+            const abs = chdir
+              ? (target.startsWith("/") ? target : baseDir + "/" + target)
+              : ctx.vfs.absolutize(target);
+            const st = ctx.vfs.stat(abs);
+            if (st.error) return err("tar: " + target + ": " + st.error);
+            if (st.node.type === "file") {
+              entries.push({ name: relTo(abs), mode: st.node.mode, content: st.node.content });
+            } else if (st.node.type === "dir") {
+              const fr = ctx.vfs.find(abs, n => n.type === "file");
+              if (fr.error) return err("tar: " + target + ": " + fr.error);
+              for (const f of fr.results) {
+                entries.push({ name: relTo(f.path), mode: f.node.mode, content: f.node.content });
+              }
+            }
+          }
+          const packed = maybeWrap(tarPack(entries));
+          const w = ctx.vfs.writeFile(archiveFile, packed);
+          if (w.error) return err("tar: " + archiveFile + ": " + w.error);
+          return ok(verbose ? entries.map(e => e.name).join("\n") + "\n" : "");
+        }
+
+        // x / t: アーカイブを読む
+        const r = ctx.vfs.readFile(archiveFile);
+        if (r.error) return err("tar: " + archiveFile + ": " + r.error);
+        const u = maybeUnwrap(r.content);
+        if (u.error) return err("tar: " + archiveFile + ": " + u.error);
+        if (!isTar(u.data)) return err("tar: " + archiveFile + ": tar アーカイブではありません");
+        const files = tarUnpack(u.data);
+
+        if (modeChar === "t") {
+          return ok(files.map(f => f.name).join("\n") + (files.length ? "\n" : ""));
+        }
+        // x: 展開
+        const outBase = chdir ? ctx.vfs.absolutize(chdir) : ctx.vfs.cwd;
+        let log = "";
+        for (const f of files) {
+          const destPath = outBase + "/" + f.name;
+          // 親ディレクトリを必要に応じて作る
+          const segs = destPath.split("/");
+          const parentPath = segs.slice(0, -1).join("/") || "/";
+          ctx.vfs.mkdir(parentPath, { recursive: true });
+          const w = ctx.vfs.writeFile(destPath, f.content);
+          if (w.error) return err("tar: " + f.name + ": " + w.error);
+          if (verbose) log += f.name + "\n";
+        }
+        return ok(log);
+      }
+    },
+
+    less: {
+      description: "ファイルをページャで表示 (! でシェル脱出, q で終了)",
+      run(ctx) {
+        const target = ctx.args.find(a => !a.startsWith("-"));
+        if (!target) return err("less: ファイルを指定してください");
+        const r = ctx.vfs.readFile(target);
+        if (r.error) return err("less: " + target + ": " + r.error);
+        const banner = r.content +
+          "\n\x1b[1m" + target + "\x1b[0m (END)\n" +
+          "less: q で終了 / !cmd でシェルを実行\n";
+
+        ctx.shell._interactive = {
+          name: "less",
+          prompt: ":",
+          handler: async (line, ctx2) => {
+            const t = String(line).trim();
+            // q / Q / :q / 空 (Enter のみ) で終了
+            if (t === "" || t === "q" || t === "Q" || t === ":q") {
+              return { output: "", exit: true };
+            }
+            // !cmd でシェル脱出 (現在のシェルコンテキストでサブコマンド実行)
+            if (t.startsWith("!")) {
+              const sub = t.slice(1).trim();
+              if (!sub) return { output: "(less) シェルコマンドを ! の後に書いてください\n", exit: false };
+              const saved = ctx2.shell._interactive;
+              ctx2.shell._interactive = null;
+              const res = await ctx2.shell.run(sub);
+              ctx2.shell._interactive = saved;
+              return { output: (res.output || "") + "(less に戻ります)\n", exit: false };
+            }
+            if (t === "h" || t === ":h" || t === "help") {
+              return { output: "less: q 終了 / !cmd シェル実行\n", exit: false };
+            }
+            // 未知のキー: 何もしない
+            return { output: "", exit: false };
+          }
+        };
+        return { stdout: banner, stderr: "", exitCode: 0, interactive: true };
+      }
+    },
+
+    more: {
+      description: "ファイルをページャで表示 (less と同等の簡易版)",
+      run(ctx) { return ctx.shell.commands.less.run(ctx); }
+    },
+
+    vim: {
+      description: "(簡易) テキストエディタ。:!cmd / :shell でシェル脱出",
+      run(ctx) {
+        const target = ctx.args.find(a => !a.startsWith("-"));
+        const filename = target || "(無題)";
+        let content = "";
+        if (target) {
+          const r = ctx.vfs.readFile(target);
+          if (r.error && r.error !== "ENOENT") return err("vim: " + target + ": " + r.error);
+          content = (r.error || !r.content) ? "" : r.content;
+        }
+        const banner =
+          (content ? content : "\n") +
+          "\x1b[7m" + filename + "\x1b[0m  -- VIM (簡易モード) --\n" +
+          "  :q              終了\n" +
+          "  :!cmd           シェルコマンドを実行\n" +
+          "  :shell / :sh    通常シェルに脱出 (vim を抜ける)\n" +
+          "  :set shell=...  :shell で起動するシェルを変更\n";
+
+        let shellOverride = null;
+
+        ctx.shell._interactive = {
+          name: "vim",
+          prompt: ":",
+          handler: async (line, ctx2) => {
+            let t = String(line).trim();
+            if (t === "") return { output: "", exit: false };
+            // : を打たずに入力された場合も Ex コマンドとして解釈する (教育用)
+            if (!t.startsWith(":")) t = ":" + t;
+            if (t === ":q" || t === ":q!" || t === ":wq" || t === ":x" || t === ":exit") {
+              return { output: "", exit: true };
+            }
+            if (t.startsWith(":!")) {
+              const sub = t.slice(2).trim();
+              if (!sub) return { output: "(vim) ! の後にコマンドを書いてください\n", exit: false };
+              const saved = ctx2.shell._interactive;
+              ctx2.shell._interactive = null;
+              const res = await ctx2.shell.run(sub);
+              ctx2.shell._interactive = saved;
+              return { output: (res.output || "") + "(Press ENTER) (vim に戻ります)\n", exit: false };
+            }
+            if (t === ":shell" || t === ":sh") {
+              // 通常シェルに脱出 (vim を抜ける)。shellOverride が設定されていれば
+              // 表示メッセージで示す。
+              const which = shellOverride || "/bin/bash";
+              return {
+                output: "vim: " + which + " に脱出します (vim を終了)\n",
+                exit: true
+              };
+            }
+            if (t.startsWith(":set shell=")) {
+              shellOverride = t.slice(":set shell=".length).trim();
+              return { output: "vim: shell = " + shellOverride + "\n", exit: false };
+            }
+            if (t === ":help" || t === ":h") {
+              return { output: "vim: :q 終了  :!cmd  シェル実行  :shell  脱出  :set shell=...\n", exit: false };
+            }
+            return { output: "vim: 未知のコマンド: " + t + "\n", exit: false };
+          }
+        };
+        return { stdout: banner, stderr: "", exitCode: 0, interactive: true };
+      }
+    },
+
+    vi: {
+      description: "(簡易) vim と同じ",
+      run(ctx) { return ctx.shell.commands.vim.run(ctx); }
+    },
+
     diff: {
       description: "2つのファイルの差分を表示",
       run(ctx) {
@@ -941,26 +1511,251 @@
       }
     },
 
-    // 教育用: 制限のあるコマンドを優しくガイドする
+    // SSH 鍵認証 (擬似)。vfs.sshKeys["user@host"] = { authorizedKey, onAuth }
+    // 鍵が一致したら onAuth ハンドラの返り値を welcome メッセージと共に表示する。
     ssh: {
-      description: "(模擬) 別ホストへ ssh 接続を試みる",
-      run(ctx) {
-        const target = ctx.args.find(a => !a.startsWith("-"));
-        if (!target) return err("ssh: 接続先を指定してください (例: ssh user@localhost)");
-        // この仮想環境では実 ssh は動かない。レベル進行のためのフックは別途 level.js が拾う
-        return {
-          stdout: "",
-          stderr: `ssh: この仮想ターミナルでは ssh の接続は擬似的に処理されます。\n対象: ${target}\nこのレベル内のパスワード入力欄から進めてください。\n`,
-          exitCode: 1,
-          sshIntent: { target }
-        };
+      description: "SSH リモートログイン (擬似: 鍵認証のみ対応)",
+      async run(ctx) {
+        // ssh [-i keyfile] [-p port] [-o opt=val] user@host
+        let identityFile = null;
+        let port = 22;
+        let target = null;
+        const args = ctx.args.slice();
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          if (a === "-i") { identityFile = args[++i]; continue; }
+          if (a === "-p") { port = parseInt(args[++i], 10); continue; }
+          if (a === "-o") { i++; continue; }                      // -o option=value は無視
+          if (a.startsWith("-i") && a.length > 2) { identityFile = a.slice(2); continue; }
+          if (a.startsWith("-p") && a.length > 2) { port = parseInt(a.slice(2), 10); continue; }
+          if (a.startsWith("-")) continue;                        // 未対応フラグは無視
+          if (!target) target = a;
+        }
+        if (!target) return err("ssh: user@host を指定してください (例: ssh -i key bandit14@localhost)");
+        if (!target.includes("@")) return err("ssh: 形式は user@host です");
+
+        const sshKeys = ctx.vfs.sshKeys || {};
+        const config = sshKeys[target] || sshKeys[target + ":" + port];
+
+        // 鍵を読む
+        let providedKey = null;
+        if (identityFile) {
+          const r = ctx.vfs.readFile(identityFile);
+          if (r.error) {
+            return err("Warning: Identity file " + identityFile + " not accessible: " + r.error);
+          }
+          providedKey = r.content;
+          // 実 ssh は秘密鍵のパーミッションが緩いと拒否する
+          const st = ctx.vfs.lstat(identityFile);
+          if (!st.error && (st.node.mode & 0o077) !== 0 && st.node.owner === ctx.vfs.user) {
+            return err(
+              "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" +
+              "@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @\n" +
+              "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" +
+              "Permissions 0" + (st.node.mode & 0o777).toString(8) + " for '" + identityFile + "' are too open.\n" +
+              "It is required that your private key files are NOT accessible by others.\n" +
+              "This private key will be ignored.\n" +
+              "Load key \"" + identityFile + "\": bad permissions\n" +
+              target + ": Permission denied (publickey)."
+            );
+          }
+        }
+
+        if (!config) {
+          return err("ssh: Could not resolve hostname or no key configured for " + target);
+        }
+
+        const authorized = (config.authorizedKey || "").trim();
+        if (!providedKey || providedKey.trim() !== authorized) {
+          if (!identityFile) {
+            return err("ssh: " + target + ": Permission denied (publickey).\n(この環境ではパスワード認証は無効。-i で秘密鍵を指定してください)");
+          }
+          return err("ssh: " + target + ": Permission denied (publickey).");
+        }
+
+        // 認証成功
+        let body = "";
+        if (typeof config.onAuth === "function") {
+          try { body = await config.onAuth(ctx); }
+          catch (e) { body = "(onAuth エラー: " + (e && e.message ? e.message : String(e)) + ")\n"; }
+        }
+        const welcome =
+          "Linux training-server 5.15.0-shell #1 SMP x86_64\n" +
+          "\n" +
+          " * このセッションは Shell の擬似 ssh ログインです。\n" +
+          " * 実シェルへの遷移は行わず、相手側でのコマンド結果を以下に表示します。\n" +
+          "\n";
+        return ok(welcome + (typeof body === "string" ? body : ""));
       }
     },
 
     nc: {
-      description: "(模擬) ネットワーク接続",
+      description: "TCP / UDP の生接続。stdin を送って応答を受け取る",
+      async run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["l", "z", "v", "n", "u", "k"], string: ["p", "w"] });
+        // -l 待受モードは未実装 (将来 setuid 連携で必要)
+        if (flags.l) return err("nc: -l (listen) はこの仮想環境では未実装です");
+        // -z スキャン: 入出力なしで接続可否のみ
+        if (flags.z) {
+          if (positional.length < 2) return err("nc: -z にはホストとポートが必要です");
+          const host = positional[0];
+          const port = parseInt(positional[1], 10);
+          const p = ctx.vfs.ports[port];
+          if (!p) return err("nc: connect to " + host + " port " + port + " (tcp) failed: Connection refused");
+          const verbose = flags.v;
+          return ok(verbose ? "Connection to " + host + " " + port + " port [tcp/*] succeeded!\n" : "");
+        }
+        if (positional.length < 2) return err("nc: 用法: nc <host> <port>");
+        const host = positional[0];
+        const port = parseInt(positional[1], 10);
+        if (!Number.isFinite(port)) return err("nc: 無効なポート: " + positional[1]);
+        const p = ctx.vfs.ports[port];
+        if (!p) {
+          return err("nc: connect to " + host + " port " + port + " (tcp) failed: Connection refused");
+        }
+        // TLS ポートに生 nc で繋ぐと意味不明な応答 (TLS ServerHello バイナリ) になる
+        if (p.tls) {
+          // 教育目的でハンドラ出力を返しつつ、見た目はバイナリっぽい応答に
+          // (現実の nc → TLS は ClientHello を待つので何も返ってこないが、
+          //  学習者が「これは違う」と気付けるよう、明示的にエラー文も出す)
+          return {
+            stdout: "\x16\x03\x01\x00\x02\x02\x28",  // TLS Alert っぽい固定バイト
+            stderr: "nc: 受け取った応答は TLS のように見えます。openssl s_client を試してみてください。\n",
+            exitCode: 0
+          };
+        }
+        const input = ctx.stdin || "";
+        let res;
+        try {
+          res = await p.handler(input, { vfs: ctx.vfs, env: ctx.env });
+        } catch (e) {
+          return err("nc: サーバ処理中にエラー: " + (e && e.message ? e.message : String(e)));
+        }
+        return ok(typeof res === "string" ? res : "");
+      }
+    },
+
+    openssl: {
+      description: "openssl サブコマンド (s_client のみ実装)",
+      async run(ctx) {
+        const sub = ctx.args[0];
+        if (sub !== "s_client") {
+          return err("openssl: この仮想環境では s_client サブコマンドのみ実装されています");
+        }
+        // openssl は単一ハイフン + 長い名前 (-quiet, -connect 等) を取るので
+        // parseFlags の "短いフラグを 1 文字ずつ分解" 流儀は使えない。手動パース。
+        const rest = ctx.args.slice(1);
+        const flags = {};
+        const positional = [];
+        const BOOL = new Set(["quiet", "ign_eof", "showcerts", "debug", "msg", "no_ign_eof"]);
+        const STR  = new Set(["connect", "servername", "cert", "key", "CAfile", "verify"]);
+        for (let i = 0; i < rest.length; i++) {
+          const a = rest[i];
+          if (a.startsWith("-") && a.length > 1) {
+            const name = a.slice(1);
+            if (BOOL.has(name)) { flags[name] = true; continue; }
+            if (STR.has(name))  { flags[name] = rest[++i]; continue; }
+            // 未知のフラグは無視 (実 openssl はエラーだがここでは寛容に)
+            continue;
+          }
+          positional.push(a);
+        }
+        // -connect host:port
+        const target = flags.connect || positional[0];
+        if (!target || !target.includes(":")) {
+          return err("openssl s_client: -connect <host>:<port> を指定してください");
+        }
+        const [host, portStr] = target.split(":");
+        const port = parseInt(portStr, 10);
+        const p = ctx.vfs.ports[port];
+        const banner =
+          "CONNECTED(00000003)\n" +
+          "Certificate chain\n" +
+          " 0 s:CN = " + host + "\n" +
+          "   i:CN = Shell Training Local CA\n" +
+          "---\n" +
+          "Server certificate\n" +
+          "-----BEGIN CERTIFICATE-----\n" +
+          "MIIBszCCAVqgAwIBAgIUE+xQqLb0YjA1Z3RvbnNoZWxsX2NlcnQwCgYIKoZIzj0\n" +
+          "(略 — テスト用ダミー)\n" +
+          "-----END CERTIFICATE-----\n" +
+          "---\n" +
+          "SSL handshake has read 4096 bytes and written 312 bytes\n" +
+          "---\n" +
+          "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\n" +
+          "Verify return code: 0 (ok)\n" +
+          "---\n";
+
+        if (!p) {
+          return {
+            stdout: flags.quiet ? "" : "",
+            stderr: "openssl: " + host + ":" + port + ": Connection refused\n",
+            exitCode: 1
+          };
+        }
+        if (!p.tls) {
+          // TLS でないポートに s_client するとハンドシェイクが失敗する
+          return {
+            stdout: flags.quiet ? "" : "CONNECTED(00000003)\n",
+            stderr: "openssl: SSL handshake failure (相手は TLS を喋っていないようです)\n",
+            exitCode: 1
+          };
+        }
+        const input = ctx.stdin || "";
+        let res;
+        try {
+          res = await p.handler(input, { vfs: ctx.vfs, env: ctx.env });
+        } catch (e) {
+          return err("openssl: サーバ処理中にエラー: " + (e && e.message ? e.message : String(e)));
+        }
+        const body = typeof res === "string" ? res : "";
+        return ok((flags.quiet ? "" : banner) + body);
+      }
+    },
+
+    nmap: {
+      description: "ポートスキャン (仮想)",
       run(ctx) {
-        return err("nc: この仮想ターミナルではネットワーク機能は擬似的に再現されます。\n各レベルの説明に従って操作してください。");
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["sV", "sS", "sT", "Pn", "v"], string: ["p"] });
+        const host = positional[0] || "localhost";
+        // -p の範囲指定 (1-65535 / 22 / 30000-32000 / 80,443)
+        let portsToScan = [];
+        if (flags.p) {
+          for (const part of String(flags.p).split(",")) {
+            if (part.includes("-")) {
+              const [lo, hi] = part.split("-").map(s => parseInt(s, 10));
+              for (let i = lo; i <= hi; i++) portsToScan.push(i);
+            } else {
+              portsToScan.push(parseInt(part, 10));
+            }
+          }
+        } else {
+          // デフォルトは vfs.ports に登録されているものだけスキャン (デモ用)
+          portsToScan = Object.keys(ctx.vfs.ports).map(Number).sort((a, b) => a - b);
+        }
+        let out = "Starting Nmap (Shell virtual nmap) ( https://nmap.org )\n";
+        out += "Nmap scan report for " + host + "\n";
+        out += "Host is up.\n";
+        const open = portsToScan.filter(n => ctx.vfs.ports[n]);
+        if (open.length === 0) {
+          out += "All scanned ports on " + host + " are: closed\n";
+        } else {
+          // 列の幅は実 nmap 風 (PORT は 9 文字, STATE は 5 文字)
+          const head = flags.sV
+            ? "PORT      STATE SERVICE  VERSION\n"
+            : "PORT      STATE SERVICE\n";
+          out += head;
+          for (const port of open) {
+            const p = ctx.vfs.ports[port];
+            const portCol = (port + "/tcp").padEnd(10, " ");
+            const stateCol = "open ";
+            const svc = p.tls ? "ssl/unknown" : "unknown";
+            const ver = flags.sV ? "  " + (p.banner || "") : "";
+            out += portCol + stateCol + svc + ver + "\n";
+          }
+        }
+        out += "Nmap done: 1 IP address (1 host up) scanned\n";
+        return ok(out);
       }
     }
   };

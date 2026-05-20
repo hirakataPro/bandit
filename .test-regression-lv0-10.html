@@ -1,0 +1,145 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>REG_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/data/levels.js"></script>
+<script src="assets/data/level-data.js"></script>
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Level 0〜10 回帰テスト (Wave A〜D 後) ===");
+
+  function newShellForLevel(n) {
+    const fs = window.LEVEL_DATA[n].fs;
+    const vfs = new window.VFS(fs);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  async function runAll(sh, lines) {
+    let combined = "";
+    for (const ln of lines) {
+      const r = await sh.run(ln);
+      combined += "$ " + ln + "\n" + (r.output || "");
+    }
+    return combined;
+  }
+
+  // それぞれ「想定解の典型コマンド列を打ち、最終出力にパスワードが含まれること」を確認
+
+  // 各レベルの想定解で「.password に書かれた文字列」が確実に出力に出ることを確認
+  function pwOf(n) { return window.LEVEL_DATA[n].password; }
+
+  await test("Lv0: pwd → ls → cat readme", async () => {
+    const sh = newShellForLevel(0);
+    const out = await runAll(sh, ["pwd", "ls", "cat readme"]);
+    contains(out, pwOf(0));
+  });
+
+  await test("Lv1: cat ./-", async () => {
+    const sh = newShellForLevel(1);
+    const out = await runAll(sh, ["cat ./-"]);
+    contains(out, pwOf(1));
+  });
+
+  await test("Lv1: cat < ./-  (リダイレクト解)", async () => {
+    const sh = newShellForLevel(1);
+    const out = await runAll(sh, ["cat < ./-"]);
+    contains(out, pwOf(1));
+  });
+
+  await test("Lv2: シングルクォートで空白入り", async () => {
+    const sh = newShellForLevel(2);
+    const out = await runAll(sh, ["cat 'hidden words inside.txt'"]);
+    contains(out, pwOf(2));
+  });
+
+  await test("Lv2: バックスラッシュエスケープ", async () => {
+    const sh = newShellForLevel(2);
+    const out = await runAll(sh, ["cat hidden\\ words\\ inside.txt"]);
+    contains(out, pwOf(2));
+  });
+
+  await test("Lv3: 隠しファイル cd → ls -a → cat .note", async () => {
+    const sh = newShellForLevel(3);
+    const out = await runAll(sh, ["cd inhere", "ls -a", "cat .note"]);
+    contains(out, pwOf(3));
+  });
+
+  await test("Lv4: cd → file ./* → cat ./file07", async () => {
+    const sh = newShellForLevel(4);
+    const out1 = await runAll(sh, ["cd inhere", "file ./*"]);
+    contains(out1, "ASCII text", "file07 のみ ASCII text");
+    const out2 = await runAll(sh, ["cat ./file07"]);
+    contains(out2, pwOf(4));
+  });
+
+  await test("Lv5: find -type f -size 32c → cat", async () => {
+    const sh = newShellForLevel(5);
+    const out = await runAll(sh, ["find inhere -type f -size 32c"]);
+    // 出力にある最後のパスを抽出
+    const paths = out.split("\n").filter(l => l.startsWith("/") || l.startsWith("inhere/"));
+    if (paths.length === 0) throw new Error("find が何も返していない: " + out);
+    const out2 = await runAll(sh, ["cat " + paths[paths.length - 1]]);
+    contains(out2, pwOf(5));
+  });
+
+  await test("Lv6: find / -user bandit7 -group bandit6 -size 35c", async () => {
+    const sh = newShellForLevel(6);
+    const out = await runAll(sh, ["find / -user bandit7 -group bandit6 -size 35c"]);
+    const paths = out.split("\n").filter(l => l.startsWith("/"));
+    if (paths.length === 0) throw new Error("find が何も返していない: " + out);
+    const out2 = await runAll(sh, ["cat " + paths[paths.length - 1]]);
+    contains(out2, pwOf(6));
+  });
+
+  await test("Lv7: grep millionth data.txt", async () => {
+    const sh = newShellForLevel(7);
+    const out = await runAll(sh, ["grep millionth data.txt"]);
+    contains(out, pwOf(7));
+  });
+
+  await test("Lv8: sort | uniq -u", async () => {
+    const sh = newShellForLevel(8);
+    const out = await runAll(sh, ["sort data.txt | uniq -u"]);
+    contains(out, pwOf(8));
+  });
+
+  await test("Lv9: strings | grep =", async () => {
+    const sh = newShellForLevel(9);
+    const out = await runAll(sh, ["strings data.txt | grep ="]);
+    contains(out, pwOf(9));
+  });
+
+  await test("Lv10: base64 -d", async () => {
+    const sh = newShellForLevel(10);
+    const out = await runAll(sh, ["base64 -d data.txt"]);
+    contains(out, pwOf(10));
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "REG_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

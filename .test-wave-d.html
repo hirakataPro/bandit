@@ -1,0 +1,151 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_D_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 400)));
+  }
+  function notContains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) >= 0)
+      throw new Error((m || "should NOT contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 400)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave D integration test (ssh -i) ===");
+
+  const NEXT_PW = "lvl14-correct-pw";
+  const VALID_KEY =
+    "-----BEGIN RSA PRIVATE KEY-----\n" +
+    "MIIEowIBAAKCAQEAxR9TpLdYzN4tD8gXm0bandit13testdummy==\n" +
+    "-----END RSA PRIVATE KEY-----\n";
+  const WRONG_KEY =
+    "-----BEGIN RSA PRIVATE KEY-----\n" +
+    "WRONGKEY/WRONGKEY/WRONGKEY/WRONGKEY/WRONGKEY/WRONGKEY==\n" +
+    "-----END RSA PRIVATE KEY-----\n";
+
+  function newShell(keyMode) {
+    // keyMode: "tight" (0600) | "loose" (0644) | "missing"
+    const files = {};
+    if (keyMode !== "missing") {
+      files["/home/bandit13/sshkey.private"] = {
+        type: "file", owner: "bandit13", group: "bandit13",
+        mode: keyMode === "loose" ? "0644" : "0600",
+        content: VALID_KEY
+      };
+      files["/home/bandit13/wrong.key"] = {
+        type: "file", owner: "bandit13", group: "bandit13", mode: "0600",
+        content: WRONG_KEY
+      };
+    }
+    const spec = {
+      user: "bandit13", hostname: "training-server",
+      home: "/home/bandit13", cwd: "/home/bandit13",
+      files,
+      sshKeys: {
+        "bandit14@localhost": {
+          authorizedKey: VALID_KEY,
+          onAuth: () => "次のレベルのパスワード:\n" + NEXT_PW + "\n"
+        }
+      }
+    };
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("ssh: 引数なしはエラー", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh");
+    contains(r.output, "user@host を指定");
+  });
+
+  await test("ssh: user@host 形式でない引数はエラー", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh hostonly");
+    contains(r.output, "形式は user@host");
+  });
+
+  await test("ssh: 未登録ホストは hostname 解決失敗", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -i sshkey.private nobody@example.com");
+    contains(r.output, "Could not resolve hostname");
+  });
+
+  await test("ssh: -i なしでは publickey 認証失敗", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh bandit14@localhost");
+    contains(r.output, "Permission denied (publickey)");
+    contains(r.output, "-i で秘密鍵を指定");
+  });
+
+  await test("ssh: 存在しない鍵ファイルはエラー", async () => {
+    const sh = newShell("missing");
+    const r = await sh.run("ssh -i /no/such/key bandit14@localhost");
+    contains(r.output, "not accessible");
+  });
+
+  await test("ssh: 緩いパーミッション (0644) の秘密鍵は拒否される", async () => {
+    const sh = newShell("loose");
+    const r = await sh.run("ssh -i sshkey.private bandit14@localhost");
+    contains(r.output, "UNPROTECTED PRIVATE KEY");
+    contains(r.output, "Permission denied (publickey)");
+  });
+
+  await test("ssh: 間違った鍵だと publickey 認証失敗", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -i wrong.key bandit14@localhost");
+    contains(r.output, "Permission denied (publickey)");
+    notContains(r.output, "UNPROTECTED");
+  });
+
+  await test("Lv13 通し: ssh -i sshkey.private bandit14@localhost で次のパスワード", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -i sshkey.private bandit14@localhost");
+    contains(r.output, "Linux training-server", "welcome");
+    contains(r.output, "lvl14-correct-pw", "onAuth の返り値");
+  });
+
+  await test("ssh: -i と引数を空白なしで連結 (-isshkey.private) でも認識", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -isshkey.private bandit14@localhost");
+    contains(r.output, "lvl14-correct-pw");
+  });
+
+  await test("ssh: -p 22 オプションは無視されて成功", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -p 22 -i sshkey.private bandit14@localhost");
+    contains(r.output, "lvl14-correct-pw");
+  });
+
+  await test("ssh: -o オプションは黙って無視", async () => {
+    const sh = newShell("tight");
+    const r = await sh.run("ssh -o StrictHostKeyChecking=no -i sshkey.private bandit14@localhost");
+    contains(r.output, "lvl14-correct-pw");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_D_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

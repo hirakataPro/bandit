@@ -1,0 +1,228 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_C_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function eq(a, b, m) {
+    if (a === b) return true;
+    throw new Error((m || "mismatch") +
+      "\n  expected: " + JSON.stringify(b).slice(0, 200) +
+      "\n  actual:   " + JSON.stringify(a).slice(0, 200));
+  }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 300)));
+  }
+  function notContains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) >= 0)
+      throw new Error((m || "should NOT contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 300)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave C integration test (nc / openssl / nmap) ===");
+
+  function buildShell() {
+    const CURRENT_PW = "bandit14-pass";
+    const NEXT_PW    = "bandit15-pass";
+    const NEXT_PW_15 = "bandit16-pass";
+    const PRIVKEY    = "-----BEGIN RSA PRIVATE KEY-----\nMIICXAIBAAKBgQC...\n-----END RSA PRIVATE KEY-----\n";
+
+    const spec = {
+      user: "bandit14", hostname: "training-server",
+      home: "/home/bandit14", cwd: "/home/bandit14",
+      files: {
+        "/etc/bandit_pass/bandit14": { type: "file", owner: "bandit14", group: "bandit14", mode: "0400",
+          content: CURRENT_PW + "\n" },
+        "/etc/bandit_pass/bandit15": { type: "file", owner: "bandit15", group: "bandit15", mode: "0400",
+          content: NEXT_PW + "\n" }
+      },
+      ports: {
+        // Lv14: plain TCP, パスワードを送ると次のパスワードを返す
+        30000: { tls: false, banner: "shell-pass-server 1.0",
+          handler: (input) => input.trim() === CURRENT_PW ? NEXT_PW + "\n" : "Wrong! Please enter the correct current password.\n" },
+        // Lv15: TLS, 同じパスワードチェック
+        30001: { tls: true,  banner: "shell-pass-server (TLS) 1.0",
+          handler: (input) => input.trim() === NEXT_PW ? NEXT_PW_15 + "\n" : "Wrong!\n" },
+        // Lv16: 範囲スキャン用の echo サーバ群 + 1つだけ秘密鍵を返す TLS
+        31046: { tls: false, handler: (input) => input },                  // echo
+        31518: { tls: true,  handler: (input) => input },                  // TLS echo
+        31691: { tls: false, handler: (input) => input },                  // echo
+        31790: { tls: true,  handler: (input) =>
+          input.trim() === NEXT_PW_15 ? PRIVKEY : "Wrong!\n" },             // 正解 TLS
+        31960: { tls: false, handler: (input) => input }                   // echo
+      }
+    };
+    return new window.Shell({ vfs: new window.VFS(spec) });
+  }
+  function newShell() {
+    const sh = buildShell();
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  // ---------------- nc ----------------
+
+  await test("nc: 用法を満たさないとエラー", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc");
+    contains(r.output, "用法", "usage エラー");
+  });
+
+  await test("nc: 閉じてるポートは Connection refused", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc localhost 9");
+    contains(r.output, "Connection refused");
+  });
+
+  await test("Lv14: パイプでパスワードを送ると次のパスワードが返る", async () => {
+    const sh = newShell();
+    const r = await sh.run("cat /etc/bandit_pass/bandit14 | nc localhost 30000");
+    contains(r.output, "bandit15-pass", "正解で次の pw");
+  });
+
+  await test("Lv14: 違うパスワードだとサーバが拒否", async () => {
+    const sh = newShell();
+    const r = await sh.run("echo wrong | nc localhost 30000");
+    contains(r.output, "Wrong!");
+  });
+
+  await test("nc: TLS ポートに繋ぐと教育ガイド付きでバイナリ応答", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc localhost 30001");
+    contains(r.output, "openssl s_client", "ガイド文");
+  });
+
+  await test("nc -zv: 開いてるポートで succeeded", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc -zv localhost 30000");
+    contains(r.output, "succeeded");
+  });
+
+  await test("nc -zv: 閉じてるポートで refused", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc -zv localhost 9");
+    contains(r.output, "Connection refused");
+  });
+
+  await test("nc -l (listen) は未実装エラー", async () => {
+    const sh = newShell();
+    const r = await sh.run("nc -l -p 12345");
+    contains(r.output, "未実装");
+  });
+
+  // ---------------- openssl ----------------
+
+  await test("openssl s_client: TLS ポートに繋いでバナー + 応答", async () => {
+    const sh = newShell();
+    const r = await sh.run("echo bandit15-pass | openssl s_client -connect localhost:30001");
+    contains(r.output, "CONNECTED", "バナー");
+    contains(r.output, "Cipher", "TLS 情報");
+    contains(r.output, "bandit16-pass", "正解で次の pw");
+  });
+
+  await test("openssl s_client -quiet: バナーを抑制", async () => {
+    const sh = newShell();
+    const r = await sh.run("echo bandit15-pass | openssl s_client -connect localhost:30001 -quiet");
+    notContains(r.output, "CONNECTED", "バナーが出ない");
+    contains(r.output, "bandit16-pass", "応答は出る");
+  });
+
+  await test("openssl s_client: 非TLSポートはハンドシェイク失敗", async () => {
+    const sh = newShell();
+    const r = await sh.run("openssl s_client -connect localhost:30000");
+    contains(r.output, "handshake failure");
+  });
+
+  await test("openssl s_client: 閉じてるポートは refused", async () => {
+    const sh = newShell();
+    const r = await sh.run("openssl s_client -connect localhost:9");
+    contains(r.output, "Connection refused");
+  });
+
+  await test("openssl: 未対応サブコマンドはエラー", async () => {
+    const sh = newShell();
+    const r = await sh.run("openssl version");
+    contains(r.output, "s_client", "ガイド");
+  });
+
+  // ---------------- nmap ----------------
+
+  await test("nmap: 引数なしで vfs.ports に登録された全ポートを表示", async () => {
+    const sh = newShell();
+    const r = await sh.run("nmap localhost");
+    contains(r.output, "Nmap scan report");
+    contains(r.output, "30000/tcp");
+    contains(r.output, "30001/tcp");
+  });
+
+  await test("nmap -p 範囲: 範囲内の open ポートを表示", async () => {
+    const sh = newShell();
+    const r = await sh.run("nmap localhost -p 31000-32000");
+    contains(r.output, "31046/tcp");
+    contains(r.output, "31518/tcp");
+    contains(r.output, "31790/tcp");
+    notContains(r.output, "30000/tcp", "範囲外は出ない");
+  });
+
+  await test("nmap -sV: TLS ポートに ssl/unknown を付ける", async () => {
+    const sh = newShell();
+    const r = await sh.run("nmap -sV localhost -p 31000-32000");
+    contains(r.output, "ssl/unknown");
+    contains(r.output, "31518/tcp");
+  });
+
+  await test("nmap: 全部閉じてる範囲はその旨を表示", async () => {
+    const sh = newShell();
+    const r = await sh.run("nmap localhost -p 1-100");
+    contains(r.output, "closed", "閉じている表記");
+  });
+
+  // ---------------- Bandit Lv14/15/16 通しトレース ----------------
+
+  await test("Lv14 通し: cat password | nc → 次の pw", async () => {
+    const sh = newShell();
+    const r = await sh.run("cat /etc/bandit_pass/bandit14 | nc localhost 30000");
+    contains(r.output, "bandit15-pass");
+  });
+
+  await test("Lv15 通し: echo next_pw | openssl s_client -quiet → 次の pw", async () => {
+    const sh = newShell();
+    const r = await sh.run("echo bandit15-pass | openssl s_client -connect localhost:30001 -quiet");
+    contains(r.output, "bandit16-pass");
+  });
+
+  await test("Lv16 通し: nmap → openssl で総当たり → 正解ポートから秘密鍵", async () => {
+    const sh = newShell();
+    // 1) nmap で SSL ポートを特定
+    let r = await sh.run("nmap -sV localhost -p 31000-32000");
+    contains(r.output, "ssl/unknown");
+    // 2) 各 SSL ポートを試す: 31518 は echo, 31790 が秘密鍵を返す
+    r = await sh.run("echo bandit16-pass | openssl s_client -connect localhost:31518 -quiet");
+    contains(r.output, "bandit16-pass", "31518 は echo (送ったものが返る)");
+    r = await sh.run("echo bandit16-pass | openssl s_client -connect localhost:31790 -quiet");
+    contains(r.output, "BEGIN RSA PRIVATE KEY", "31790 が正解 (秘密鍵)");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_C_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>
