@@ -1,0 +1,385 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>LEVELS_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/data/levels.js"></script>
+<script src="assets/data/level-data.js"></script>
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Lv11+ 通しトレーステスト ===");
+
+  function shellForLevel(n) {
+    const fs = window.LEVEL_DATA[n].fs;
+    const vfs = new window.VFS(fs);
+    const sh = new window.Shell(Object.assign({ vfs }, fs.shellOptions || {}));
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+  function pwOf(n) { return window.LEVEL_DATA[n].password; }
+
+  async function runAll(sh, lines) {
+    let combined = "";
+    for (const ln of lines) {
+      const r = await sh.run(ln);
+      combined += "$ " + ln + "\n" + (r.output || "");
+    }
+    return combined;
+  }
+
+  // ---------- Lv11 ROT13 ----------
+  await test("Lv11: cat data.txt | tr 'A-Za-z' 'N-ZA-Mn-za-m'", async () => {
+    const sh = shellForLevel(11);
+    const out = await runAll(sh, ["cat data.txt | tr 'A-Za-z' 'N-ZA-Mn-za-m'"]);
+    contains(out, pwOf(11));
+  });
+
+  // ---------- Lv12 圧縮の入れ子 ----------
+  await test("Lv12: cat data.txt が hexdump 形式", async () => {
+    const sh = shellForLevel(12);
+    const out = await runAll(sh, ["cat data.txt"]);
+    contains(out, "00000000:");
+    contains(out, "1f8b", "gzip マジック (16進) が含まれる");
+  });
+
+  await test("Lv12: 通し (xxd -r → file → 解凍 5 段)", async () => {
+    const sh = shellForLevel(12);
+    // 作業ディレクトリ作って bin に戻す
+    await sh.run("mkdir /tmp/work; cp data.txt /tmp/work/data.txt; cd /tmp/work");
+    let r;
+    await sh.run("xxd -r data.txt > step.bin");
+    r = await sh.run("file step.bin");
+    contains(r.output, "gzip", "step 1: gzip");
+    await sh.run("mv step.bin step.gz; gunzip step.gz");
+    r = await sh.run("file step");
+    contains(r.output, "XZ", "step 2: xz");
+    await sh.run("mv step step.xz; unxz step.xz");
+    r = await sh.run("file step");
+    contains(r.output, "POSIX tar", "step 3: tar");
+    await sh.run("mv step step.tar; tar xf step.tar");
+    // tar xf でファイルが展開される。中身は step3.bz2 という名前。
+    r = await sh.run("ls");
+    contains(r.output, "step3.bz2");
+    r = await sh.run("file step3.bz2");
+    contains(r.output, "bzip2", "step 4: bzip2");
+    await sh.run("bunzip2 step3.bz2");
+    r = await sh.run("file step3");
+    contains(r.output, "gzip", "step 5: gzip");
+    await sh.run("mv step3 step3.gz; gunzip step3.gz");
+    r = await sh.run("cat step3");
+    contains(r.output, pwOf(12), "最終ファイルにパスワード");
+  });
+
+  // ---------- Lv13 SSH 鍵認証 ----------
+  await test("Lv13: パスワード認証は無効 (-i なしで Permission denied)", async () => {
+    const sh = shellForLevel(13);
+    const r = await sh.run("ssh bandit14@localhost");
+    contains(r.output, "Permission denied");
+  });
+
+  await test("Lv13: ssh -i sshkey.private bandit14@localhost cat readme", async () => {
+    const sh = shellForLevel(13);
+    const out = await runAll(sh, ["ssh -i sshkey.private bandit14@localhost cat readme"]);
+    contains(out, pwOf(13));
+  });
+
+  await test("Lv13: 通常ログイン (cmd 無し) でも onAuth + readme は出ない", async () => {
+    const sh = shellForLevel(13);
+    const r = await sh.run("ssh -i sshkey.private bandit14@localhost");
+    // onAuth で welcome は出るが、readme の内容は自動表示しない
+    contains(r.output, "Welcome to bandit14");
+  });
+
+  // ---------- Lv14 nc ----------
+  await test("Lv14: cat /etc/bandit_pass/bandit14 | nc localhost 30000", async () => {
+    const sh = shellForLevel(14);
+    const out = await runAll(sh, ["cat /etc/bandit_pass/bandit14 | nc localhost 30000"]);
+    contains(out, pwOf(14));
+  });
+
+  await test("Lv14: 間違ったパスワードは拒否", async () => {
+    const sh = shellForLevel(14);
+    const r = await sh.run("echo wrong | nc localhost 30000");
+    contains(r.output, "Wrong");
+  });
+
+  // ---------- Lv15 openssl s_client ----------
+  await test("Lv15: nc で TLS ポートに繋ぐと教育ガイド", async () => {
+    const sh = shellForLevel(15);
+    const r = await sh.run("nc localhost 30001");
+    contains(r.output, "openssl");
+  });
+
+  await test("Lv15: openssl s_client -quiet で次のパスワード", async () => {
+    const sh = shellForLevel(15);
+    const out = await runAll(sh, ["cat /etc/bandit_pass/bandit15 | openssl s_client -connect localhost:30001 -quiet"]);
+    contains(out, pwOf(15));
+  });
+
+  // ---------- Lv16 nmap + openssl ----------
+  await test("Lv16: nmap -sV で範囲内ポートを TLS/非TLS 区別", async () => {
+    const sh = shellForLevel(16);
+    const r = await sh.run("nmap -sV localhost -p 30100-30200");
+    contains(r.output, "ssl/unknown");
+    contains(r.output, "30180/tcp");
+  });
+
+  await test("Lv16: TLS ポート 30180 が秘密鍵を返す → ssh で次レベル pw 取得", async () => {
+    const sh = shellForLevel(16);
+    // 30180 から秘密鍵取得
+    let r = await sh.run("cat /etc/bandit_pass/bandit16 | openssl s_client -connect localhost:30180 -quiet");
+    contains(r.output, "BEGIN RSA PRIVATE KEY");
+    // 鍵をファイルに保存して ssh で次レベルへ
+    await sh.run("cat /etc/bandit_pass/bandit16 | openssl s_client -connect localhost:30180 -quiet > /tmp/key17");
+    await sh.run("chmod 600 /tmp/key17");   // chmod 未実装でも errno で続行できる
+    r = await sh.run("ssh -i /tmp/key17 bandit17@localhost cat /etc/bandit_pass/bandit17");
+    contains(r.output, pwOf(16));
+  });
+
+  await test("Lv16: 別 TLS ポート 30130 は echo (送ったものが返る)", async () => {
+    const sh = shellForLevel(16);
+    const r = await sh.run("echo testecho | openssl s_client -connect localhost:30130 -quiet");
+    contains(r.output, "testecho");
+  });
+
+  // ---------- Lv17 diff ----------
+  await test("Lv17: diff passwords.old passwords.new", async () => {
+    const sh = shellForLevel(17);
+    const out = await runAll(sh, ["diff passwords.old passwords.new"]);
+    contains(out, pwOf(17));
+    contains(out, ">", "diff の > 印");
+  });
+
+  // ---------- Lv18 .bashrc バイパス ----------
+  await test("Lv18: ssh 通常ログインは autoExit で切断", async () => {
+    const sh = shellForLevel(18);
+    const r = await sh.run("ssh -i sshkey.private bandit18@localhost");
+    contains(r.output, "Connection to localhost closed");
+  });
+
+  await test("Lv18: ssh ... cat readme で次のパスワード", async () => {
+    const sh = shellForLevel(18);
+    const out = await runAll(sh, ["ssh -i sshkey.private bandit18@localhost cat readme"]);
+    contains(out, pwOf(18));
+  });
+
+  // ---------- Lv19 setuid ----------
+  await test("Lv19: 通常 cat は権限エラー", async () => {
+    const sh = shellForLevel(19);
+    const r = await sh.run("cat /etc/bandit_pass/bandit20");
+    contains(r.output, "権限がありません");
+  });
+
+  await test("Lv19: ./bandit20-do cat で setuid 越しに読む", async () => {
+    const sh = shellForLevel(19);
+    const out = await runAll(sh, ["./bandit20-do cat /etc/bandit_pass/bandit20"]);
+    contains(out, pwOf(19));
+  });
+
+  // ---------- Lv20 listener + setuid connector ----------
+  await test("Lv20: リスナー入力なしで suconnect → エラー", async () => {
+    const sh = shellForLevel(20);
+    const r = await sh.run("./suconnect 31000");
+    contains(r.output, "nothing on /tmp/listener-input");
+  });
+
+  await test("Lv20: cat password > /tmp/listener-input → ./suconnect で次のパスワード", async () => {
+    const sh = shellForLevel(20);
+    const out = await runAll(sh, [
+      "cat /etc/bandit_pass/bandit20 > /tmp/listener-input",
+      "./suconnect 31000"
+    ]);
+    contains(out, pwOf(20));
+  });
+
+  // ---------- Lv21 cron /etc/cron.d ----------
+  await test("Lv21: cron 定義 → スクリプト → 出力 を辿れる", async () => {
+    const sh = shellForLevel(21);
+    let r = await sh.run("cat /etc/cron.d/cronjob_bandit22");
+    contains(r.output, "/usr/bin/cronjob_bandit22.sh");
+    r = await sh.run("cat /usr/bin/cronjob_bandit22.sh");
+    contains(r.output, "/tmp/");
+    r = await sh.run("cat /tmp/t7O6lds9S0RqQh9aMcz6ShpAoZKF7fgv");
+    contains(r.output, pwOf(21));
+  });
+
+  // ---------- Lv22 md5sum 動的ファイル名 ----------
+  await test("Lv22: md5sum でハッシュを得て /tmp/<hash> を読む", async () => {
+    const sh = shellForLevel(22);
+    let r = await sh.run("cat /usr/bin/cronjob_bandit23.sh");
+    contains(r.output, "md5sum");
+    r = await sh.run("echo 'I am user bandit23' | md5sum | cut -d ' ' -f 1");
+    contains(r.output, "8ca319486bfbbc3663ea0fbe81326349");
+    r = await sh.run("cat /tmp/8ca319486bfbbc3663ea0fbe81326349");
+    contains(r.output, pwOf(22));
+  });
+
+  // ---------- Lv23 cron が自作スクリプトを bandit24 として実行 ----------
+  await test("Lv23: bandit23 は password を直接読めない", async () => {
+    const sh = shellForLevel(23);
+    const r = await sh.run("cat /etc/bandit_pass/bandit24");
+    contains(r.output, "権限");
+  });
+
+  await test("Lv23: /var/spool に script 設置 → cron-tick → 出力 cat", async () => {
+    const sh = shellForLevel(23);
+    await sh.run("echo 'cat /etc/bandit_pass/bandit24 > /tmp/bandit23-out' > /var/spool/cron/bandit24/getpw.sh");
+    await sh.run("/usr/local/bin/cron-tick");
+    const r = await sh.run("cat /tmp/bandit23-out");
+    contains(r.output, pwOf(23));
+  });
+
+  // ---------- Lv24 PIN brute force ----------
+  await test("Lv24: PIN 1729 を直接送ると正解 ($() インライン展開)", async () => {
+    const sh = shellForLevel(24);
+    const out = await runAll(sh, ["echo \"$(cat /etc/bandit_pass/bandit24) 1729\" | nc localhost 30002"]);
+    contains(out, pwOf(24));
+  });
+
+  await test("Lv24: 間違った PIN は Wrong", async () => {
+    const sh = shellForLevel(24);
+    const r = await sh.run("echo \"$(cat /etc/bandit_pass/bandit24) 0000\" | nc localhost 30002");
+    contains(r.output, "Wrong");
+  });
+
+  // ---------- Lv25 less ! ----------
+  await test("Lv25: less welcome.txt → !cat .readme で次のパスワード", async () => {
+    const sh = shellForLevel(25);
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("!cat /home/bandit26/.readme");
+    contains(r.output, pwOf(25));
+    await sh.continueInteractive("q");
+  });
+
+  // ---------- Lv26 vim :!cmd ----------
+  await test("Lv26: vim 起動 → :!cat secret で次のパスワード", async () => {
+    const sh = shellForLevel(26);
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":!cat /home/bandit27/secret");
+    contains(r.output, pwOf(26));
+    await sh.continueInteractive(":q");
+  });
+
+  // ---------- Lv27 git clone ----------
+  await test("Lv27: clone → cat README で次のパスワード", async () => {
+    const sh = shellForLevel(27);
+    await sh.run("mkdir -p /tmp/work; cd /tmp/work");
+    await sh.run("cd /tmp/work; git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    const r = await sh.run("cat /tmp/work/repo/README");
+    contains(r.output, pwOf(27));
+  });
+
+  // ---------- Lv28 git log + show ----------
+  await test("Lv28: README は redacted、git show で初期コミットからパスワード復元", async () => {
+    const sh = shellForLevel(28);
+    await sh.run("mkdir -p /tmp/w28; cd /tmp/w28");
+    await sh.run("cd /tmp/w28; git clone ssh://bandit28-git@localhost/home/bandit28-git/repo");
+    let r = await sh.run("cat /tmp/w28/repo/README");
+    contains(r.output, "REDACTED");
+    r = await sh.run("cd /tmp/w28/repo; git log");
+    contains(r.output, "initial: add password");
+    r = await sh.run("cd /tmp/w28/repo; git show c2801");
+    contains(r.output, pwOf(28));
+  });
+
+  // ---------- Lv29 git branch + checkout ----------
+  await test("Lv29: dev ブランチに切り替えると README にパスワード", async () => {
+    const sh = shellForLevel(29);
+    await sh.run("mkdir -p /tmp/w29; cd /tmp/w29");
+    await sh.run("cd /tmp/w29; git clone ssh://bandit29-git@localhost/home/bandit29-git/repo");
+    let r = await sh.run("cd /tmp/w29/repo; git branch -a");
+    contains(r.output, "dev");
+    await sh.run("cd /tmp/w29/repo; git checkout dev");
+    r = await sh.run("cat /tmp/w29/repo/README");
+    contains(r.output, pwOf(29));
+  });
+
+  // ---------- Lv30 git tag + show ----------
+  await test("Lv30: 隠しタグ secret を git show で展開 → パスワード", async () => {
+    const sh = shellForLevel(30);
+    await sh.run("mkdir -p /tmp/w30");
+    await sh.run("cd /tmp/w30; git clone ssh://bandit30-git@localhost/home/bandit30-git/repo");
+    let r = await sh.run("cd /tmp/w30/repo; git tag");
+    contains(r.output, "secret");
+    r = await sh.run("cd /tmp/w30/repo; git show secret");
+    contains(r.output, pwOf(30));
+  });
+
+  // ---------- Lv31 git push ----------
+  await test("Lv31: 正しい key.txt を push → onPush が次のパスワードを返す", async () => {
+    const sh = shellForLevel(31);
+    await sh.run("mkdir -p /tmp/w31");
+    await sh.run("cd /tmp/w31; git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    await sh.run("cd /tmp/w31/repo; echo 'May I come in?' > key.txt");
+    await sh.run("cd /tmp/w31/repo; git add key.txt");
+    await sh.run("cd /tmp/w31/repo; git commit -m 'add key'");
+    const r = await sh.run("cd /tmp/w31/repo; git push");
+    contains(r.output, pwOf(31));
+  });
+
+  await test("Lv31: 違う内容の key.txt を push すると拒否", async () => {
+    const sh = shellForLevel(31);
+    await sh.run("mkdir -p /tmp/w31b");
+    await sh.run("cd /tmp/w31b; git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    await sh.run("cd /tmp/w31b/repo; echo 'wrong content' > key.txt");
+    await sh.run("cd /tmp/w31b/repo; git add key.txt");
+    await sh.run("cd /tmp/w31b/repo; git commit -m 'add wrong key'");
+    const r = await sh.run("cd /tmp/w31b/repo; git push");
+    contains(r.output, "rejected");
+  });
+
+  // ---------- Lv32 制限シェル ----------
+  await test("Lv32: ls が大文字化されて見つからない", async () => {
+    const sh = shellForLevel(32);
+    const r = await sh.run("ls");
+    contains(r.output, "LS:");
+    contains(r.output, "見つかりません");
+  });
+
+  await test("Lv32: $0 で制限解除 → cat で次のパスワード", async () => {
+    const sh = shellForLevel(32);
+    await sh.run("$0");
+    if (sh.restricted) throw new Error("restricted が解除されていない");
+    const r = await sh.run("cat /etc/bandit_pass/bandit33");
+    contains(r.output, pwOf(32));
+  });
+
+  // ---------- Lv33 振り返り ----------
+  await test("Lv33: cat readme に合言葉", async () => {
+    const sh = shellForLevel(33);
+    const r = await sh.run("cat readme");
+    contains(r.output, pwOf(33));
+  });
+
+  // ---------- Lv34 ゴール ----------
+  await test("Lv34: cat next-steps.md に終了の合言葉", async () => {
+    const sh = shellForLevel(34);
+    const r = await sh.run("cat next-steps.md");
+    contains(r.output, pwOf(34));
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "LEVELS_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

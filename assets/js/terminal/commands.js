@@ -160,6 +160,522 @@
   }
 
 
+  // ---------- MD5 (純 JS 実装) ----------
+  // WebCrypto には MD5 がない (SHA-1/256/384/512 のみ) ため、教育用に小さく実装する。
+  // RFC 1321 のリファレンス実装に準じる。
+  function md5(str) {
+    // 文字列を UTF-8 バイト列に
+    const u8 = unescape(encodeURIComponent(str));
+    const bytes = new Array(u8.length);
+    for (let i = 0; i < u8.length; i++) bytes[i] = u8.charCodeAt(i) & 0xff;
+    const bitLen = bytes.length * 8;
+    bytes.push(0x80);
+    while ((bytes.length % 64) !== 56) bytes.push(0);
+    // 64-bit little-endian length (上位 32bit は 0 で十分)
+    for (let i = 0; i < 4; i++) bytes.push((bitLen >>> (i * 8)) & 0xff);
+    for (let i = 0; i < 4; i++) bytes.push(0);
+
+    let a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+    const T = [
+      0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+      0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+      0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+      0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+      0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+      0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+      0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+      0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391
+    ];
+    const S = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+               5, 9,14,20,5, 9,14,20,5, 9,14,20,5, 9,14,20,
+               4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+               6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+    function rotl(x, n) { return ((x << n) | (x >>> (32 - n))) >>> 0; }
+
+    for (let off = 0; off < bytes.length; off += 64) {
+      const M = new Array(16);
+      for (let j = 0; j < 16; j++) {
+        M[j] = (bytes[off + j*4]) |
+               (bytes[off + j*4 + 1] << 8) |
+               (bytes[off + j*4 + 2] << 16) |
+               (bytes[off + j*4 + 3] << 24);
+        M[j] = M[j] >>> 0;
+      }
+      let A = a, B = b, C = c, D = d;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16)      { F = (B & C) | (~B & D); g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+        else if (i < 48) { F = B ^ C ^ D;          g = (3 * i + 5) % 16; }
+        else             { F = C ^ (B | ~D);       g = (7 * i) % 16; }
+        F = (F + A + T[i] + M[g]) >>> 0;
+        A = D;
+        D = C;
+        C = B;
+        B = (B + rotl(F, S[i])) >>> 0;
+      }
+      a = (a + A) >>> 0;
+      b = (b + B) >>> 0;
+      c = (c + C) >>> 0;
+      d = (d + D) >>> 0;
+    }
+    function toHex(n) {
+      let h = "";
+      for (let i = 0; i < 4; i++) {
+        h += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, "0");
+      }
+      return h;
+    }
+    return toHex(a) + toHex(b) + toHex(c) + toHex(d);
+  }
+
+  // SHA-256 は WebCrypto を使う (非同期)
+  async function sha256(str) {
+    const enc = new TextEncoder().encode(str);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    const arr = new Uint8Array(buf);
+    let h = "";
+    for (let i = 0; i < arr.length; i++) h += arr[i].toString(16).padStart(2, "0");
+    return h;
+  }
+
+  // ---------- Git 擬似化のヘルパ ----------
+  // 仮想リポジトリ状態は vfs._gitStates: Map<repoRootPath, state> に保持。
+  // 各 state = { remoteUrl, head, branches, tags, commits, staged, origin }
+  // commits[hash] = { parent, author, date, message, tree:{path:content} }
+
+  // cwd から親へ遡り、.git ディレクトリを持つ最寄りディレクトリを探す
+  function gitFindRepoRoot(vfs, cwdOverride) {
+    let p = cwdOverride || vfs.cwd;
+    const seen = new Set();
+    while (p && !seen.has(p)) {
+      seen.add(p);
+      if (vfs._gitStates && vfs._gitStates.has(p)) {
+        return { repoRoot: p, state: vfs._gitStates.get(p) };
+      }
+      if (p === "/") break;
+      p = p.replace(/\/[^/]*\/?$/, "") || "/";
+    }
+    return null;
+  }
+
+  // URL からリポジトリ名を抽出 (例: ssh://x@y/path/repo[.git] → "repo")
+  function gitParseRepoName(url) {
+    const m = String(url).match(/\/([^/]+?)(?:\.git)?\/?$/);
+    return m ? m[1] : "repo";
+  }
+
+  // 40 桁の擬似ハッシュ (時刻 + 乱数で衝突回避)
+  function gitMakeHash() {
+    let h = "";
+    for (let i = 0; i < 40; i++) h += Math.floor(Math.random() * 16).toString(16);
+    return h;
+  }
+
+  // ref を解決: branch → tag → commit (完全一致 → prefix 一致)
+  function gitResolveRef(state, ref) {
+    if (!ref) return null;
+    if (state.branches[ref])    return state.branches[ref];
+    if (state.tags[ref])        return state.tags[ref];
+    if (state.commits[ref])     return ref;
+    const matches = Object.keys(state.commits).filter(h => h.startsWith(ref));
+    if (matches.length === 1)   return matches[0];
+    return null;
+  }
+
+  // state.head が指している現在のコミットハッシュ
+  function gitHeadCommit(state) {
+    if (!state.head) return null;
+    if (state.head.startsWith("@")) return state.head.slice(1);   // detached
+    return state.branches[state.head] || null;
+  }
+
+  // working tree の git 管理ファイルを削除する (.git/ は温存)
+  function gitClearWorkingTree(vfs, repoRoot) {
+    const r = vfs._walk(repoRoot);
+    if (r.error || r.node.type !== "dir") return;
+    for (const name of Object.keys(r.node.children)) {
+      if (name === ".git") continue;
+      delete r.node.children[name];
+    }
+  }
+
+  // tree (path→content) を repoRoot に書き出す
+  function gitMaterializeTree(vfs, repoRoot, tree) {
+    gitClearWorkingTree(vfs, repoRoot);
+    for (const path of Object.keys(tree)) {
+      const abs = repoRoot + "/" + path;
+      const parentPath = abs.replace(/\/[^/]*$/, "") || "/";
+      vfs.mkdir(parentPath, { recursive: true });
+      vfs.writeFile(abs, tree[path]);
+    }
+  }
+
+  // working tree から path → content の map を作る (.git/ 除く)
+  function gitSnapshotWorkingTree(vfs, repoRoot) {
+    const out = {};
+    const fr = vfs.find(repoRoot, n => n.type === "file");
+    if (fr.error) return out;
+    for (const f of fr.results) {
+      if (f.path.startsWith(repoRoot + "/.git/") || f.path === repoRoot + "/.git") continue;
+      const rel = f.path.startsWith(repoRoot + "/") ? f.path.slice(repoRoot.length + 1) : f.path;
+      out[rel] = f.node.content;
+    }
+    return out;
+  }
+
+  // deep-copy: コミット履歴・ブランチ・タグを別個の object として複製
+  function gitDeepCopySpec(remote) {
+    return {
+      defaultBranch: remote.defaultBranch || Object.keys(remote.branches || { master: 1 })[0] || "master",
+      branches: Object.assign({}, remote.branches || {}),
+      tags:     Object.assign({}, remote.tags     || {}),
+      commits:  Object.keys(remote.commits || {}).reduce((acc, h) => {
+        const c = remote.commits[h];
+        acc[h] = {
+          parent:  c.parent || null,
+          author:  c.author || "shell-git <git@shell>",
+          date:    c.date   || new Date().toUTCString(),
+          message: c.message || "",
+          tree:    Object.assign({}, c.tree || {})
+        };
+        return acc;
+      }, {})
+    };
+  }
+
+  // ---------- git サブコマンド実装 ----------
+
+  async function gitClone(ctx, args) {
+    let url = null, destDir = null;
+    for (const a of args) {
+      if (a.startsWith("-")) continue;
+      if (!url) url = a;
+      else if (!destDir) destDir = a;
+    }
+    if (!url) return err("fatal: You must specify a repository to clone.");
+
+    const remote = ctx.vfs.gitRepos[url];
+    if (!remote) return err("fatal: repository '" + url + "' does not exist (vfs.gitRepos に未登録)");
+
+    const repoName = destDir || gitParseRepoName(url);
+    const repoRoot = ctx.vfs.absolutize(repoName);
+
+    if (ctx.vfs.exists(repoRoot)) {
+      const r = ctx.vfs.stat(repoRoot);
+      if (!r.error && r.node.type === "dir") {
+        const ls = ctx.vfs.list(repoRoot);
+        if (ls.entries && ls.entries.length > 0) {
+          return err("fatal: destination path '" + repoName + "' already exists and is not an empty directory.");
+        }
+      } else {
+        return err("fatal: destination path '" + repoName + "' already exists.");
+      }
+    }
+
+    ctx.vfs.mkdir(repoRoot, { recursive: true });
+    ctx.vfs.mkdir(repoRoot + "/.git", { recursive: true });
+
+    // リモートの履歴を deep-copy
+    const spec = gitDeepCopySpec(remote);
+    const state = {
+      remoteUrl: url,
+      head: spec.defaultBranch,
+      branches: spec.branches,
+      tags:     spec.tags,
+      commits:  spec.commits,
+      staged:   {},
+      origin:   "origin"
+    };
+    ctx.vfs._gitStates.set(repoRoot, state);
+
+    // HEAD ブランチの tree を materialize
+    const headHash = gitHeadCommit(state);
+    if (headHash && state.commits[headHash]) {
+      gitMaterializeTree(ctx.vfs, repoRoot, state.commits[headHash].tree);
+    }
+
+    // ダミー .git/HEAD
+    ctx.vfs.writeFile(repoRoot + "/.git/HEAD", "ref: refs/heads/" + state.head + "\n");
+
+    const objCount = Object.keys(state.commits).length;
+    return {
+      stdout: "",
+      stderr:
+        "Cloning into '" + repoName + "'...\n" +
+        "remote: Enumerating objects: " + objCount + ", done.\n" +
+        "remote: Counting objects: 100% (" + objCount + "/" + objCount + "), done.\n" +
+        "Receiving objects: 100% (" + objCount + "/" + objCount + "), done.\n",
+      exitCode: 0
+    };
+  }
+
+  function gitLog(ctx, args, repo) {
+    const { state } = repo;
+    const oneline = args.includes("--oneline");
+    let limit = Infinity;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-n" || args[i] === "--max-count") limit = parseInt(args[++i], 10) || Infinity;
+      else if (/^-\d+$/.test(args[i])) limit = parseInt(args[i].slice(1), 10) || Infinity;
+    }
+    let c = gitHeadCommit(state);
+    if (!c) return ok("fatal: your current branch does not have any commits yet\n");
+    let count = 0;
+    let out = "";
+    while (c && count < limit) {
+      const commit = state.commits[c];
+      if (!commit) break;
+      if (oneline) {
+        out += c.slice(0, 7) + " " + commit.message.split("\n")[0] + "\n";
+      } else {
+        out += "\x1b[33mcommit " + c + "\x1b[0m\n";
+        out += "Author: " + commit.author + "\n";
+        out += "Date:   " + commit.date + "\n\n";
+        out += "    " + commit.message.replace(/\n/g, "\n    ") + "\n\n";
+      }
+      c = commit.parent;
+      count++;
+    }
+    return ok(out);
+  }
+
+  function gitFormatDiff(prevTree, curTree) {
+    const all = new Set(Object.keys(prevTree || {}).concat(Object.keys(curTree || {})));
+    let out = "";
+    for (const f of [...all].sort()) {
+      const a = (prevTree && prevTree[f]) || null;
+      const b = (curTree  && curTree[f])  || null;
+      if (a === b) continue;
+      out += "diff --git a/" + f + " b/" + f + "\n";
+      if (a === null)      out += "new file mode 100644\n--- /dev/null\n+++ b/" + f + "\n";
+      else if (b === null) out += "deleted file mode 100644\n--- a/" + f + "\n+++ /dev/null\n";
+      else                 out += "--- a/" + f + "\n+++ b/" + f + "\n";
+      // 簡易: 全行を - / + で出す (ユニファイドハンク無し、教育用)
+      if (a) for (const line of a.split("\n").slice(0, -1).concat(a.endsWith("\n") ? [] : [a.split("\n").pop()])) out += "-" + line + "\n";
+      if (b) for (const line of b.split("\n").slice(0, -1).concat(b.endsWith("\n") ? [] : [b.split("\n").pop()])) out += "+" + line + "\n";
+    }
+    return out;
+  }
+
+  function gitShow(ctx, args, repo) {
+    const { state } = repo;
+    const ref = args.find(a => !a.startsWith("-")) || (state.head.startsWith("@") ? state.head.slice(1) : state.head);
+    const c = gitResolveRef(state, ref);
+    if (!c) return err("fatal: ambiguous argument '" + ref + "': unknown revision or path not in the working tree.");
+    const commit = state.commits[c];
+    let out = "\x1b[33mcommit " + c + "\x1b[0m\n";
+    out += "Author: " + commit.author + "\n";
+    out += "Date:   " + commit.date + "\n\n";
+    out += "    " + commit.message.replace(/\n/g, "\n    ") + "\n\n";
+    const parent = commit.parent ? state.commits[commit.parent] : null;
+    out += gitFormatDiff(parent ? parent.tree : {}, commit.tree);
+    return ok(out);
+  }
+
+  function gitBranch(ctx, args, repo) {
+    const { state } = repo;
+    const { flags, positional } = parseFlags(args, { boolean: ["a", "r", "v"], string: ["d", "D"] });
+    if (flags.d || flags.D) {
+      const name = flags.d || flags.D;
+      if (!state.branches[name]) return err("error: branch '" + name + "' not found.");
+      if (state.head === name) return err("error: Cannot delete branch '" + name + "' checked out at this repo");
+      delete state.branches[name];
+      return ok("Deleted branch " + name + "\n");
+    }
+    if (positional.length) {
+      // 新規作成
+      const name = positional[0];
+      if (state.branches[name]) return err("fatal: A branch named '" + name + "' already exists.");
+      state.branches[name] = gitHeadCommit(state);
+      return ok();
+    }
+    let out = "";
+    const headName = state.head.startsWith("@") ? null : state.head;
+    for (const b of Object.keys(state.branches).sort()) {
+      out += (b === headName ? "* \x1b[32m" + b + "\x1b[0m" : "  " + b) + "\n";
+    }
+    if (flags.a || flags.r) {
+      // origin/<branch> 風の remote-tracking を fake で表示 (Lv29 想定)
+      for (const b of Object.keys(state.branches).sort()) {
+        out += "  \x1b[31mremotes/origin/" + b + "\x1b[0m\n";
+      }
+    }
+    return ok(out);
+  }
+
+  function gitCheckout(ctx, args, repo) {
+    const { state, repoRoot } = repo;
+    const { flags, positional } = parseFlags(args, { boolean: ["b", "B", "f"] });
+    if ((flags.b || flags.B) && positional.length) {
+      const name = positional[0];
+      state.branches[name] = gitHeadCommit(state);
+      state.head = name;
+      return ok("Switched to a new branch '" + name + "'\n");
+    }
+    const ref = positional[0];
+    if (!ref) return err("error: ref を指定してください");
+    if (state.branches[ref] != null) {
+      state.head = ref;
+      const c = state.branches[ref];
+      if (state.commits[c]) gitMaterializeTree(ctx.vfs, repoRoot, state.commits[c].tree);
+      return ok("Switched to branch '" + ref + "'\n");
+    }
+    const c = gitResolveRef(state, ref);
+    if (c) {
+      state.head = "@" + c;
+      gitMaterializeTree(ctx.vfs, repoRoot, state.commits[c].tree);
+      return ok(
+        "Note: switching to '" + ref + "'.\n\n" +
+        "You are in 'detached HEAD' state. \n" +
+        "HEAD is now at " + c.slice(0, 7) + " " + state.commits[c].message.split("\n")[0] + "\n"
+      );
+    }
+    return err("error: pathspec '" + ref + "' did not match any file(s) known to git");
+  }
+
+  function gitTag(ctx, args, repo) {
+    const { state } = repo;
+    const { flags, positional } = parseFlags(args, { boolean: ["l", "n", "d"] });
+    if (flags.d && positional.length) {
+      delete state.tags[positional[0]];
+      return ok("Deleted tag '" + positional[0] + "'\n");
+    }
+    if (positional.length) {
+      const name = positional[0];
+      const target = positional[1] ? gitResolveRef(state, positional[1]) : gitHeadCommit(state);
+      if (!target) return err("fatal: Failed to resolve '" + (positional[1] || "HEAD") + "' as a valid ref.");
+      state.tags[name] = target;
+      return ok();
+    }
+    return ok(Object.keys(state.tags).sort().join("\n") + (Object.keys(state.tags).length ? "\n" : ""));
+  }
+
+  function gitStatus(ctx, args, repo) {
+    const { state, repoRoot } = repo;
+    const headName = state.head.startsWith("@") ? "HEAD detached at " + state.head.slice(1, 8) : "On branch " + state.head;
+    let out = headName + "\n";
+    const headHash = gitHeadCommit(state);
+    const headTree = headHash && state.commits[headHash] ? state.commits[headHash].tree : {};
+    const working = gitSnapshotWorkingTree(ctx.vfs, repoRoot);
+    const stagedKeys = Object.keys(state.staged);
+    if (stagedKeys.length) {
+      out += "\nChanges to be committed:\n  (use \"git restore --staged <file>...\" to unstage)\n";
+      for (const f of stagedKeys.sort()) {
+        out += "\t" + (headTree[f] == null ? "new file:   " : "modified:   ") + f + "\n";
+      }
+    }
+    const modified = [];
+    const untracked = [];
+    for (const f of Object.keys(working).sort()) {
+      if (state.staged[f] != null) continue;
+      if (headTree[f] == null) untracked.push(f);
+      else if (working[f] !== headTree[f]) modified.push(f);
+    }
+    if (modified.length) {
+      out += "\nChanges not staged for commit:\n";
+      for (const f of modified) out += "\tmodified:   " + f + "\n";
+    }
+    if (untracked.length) {
+      out += "\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n";
+      for (const f of untracked) out += "\t" + f + "\n";
+    }
+    if (!stagedKeys.length && !modified.length && !untracked.length) {
+      out += "\nnothing to commit, working tree clean\n";
+    }
+    return ok(out);
+  }
+
+  function gitAdd(ctx, args, repo) {
+    const { state, repoRoot } = repo;
+    const { positional } = parseFlags(args, { boolean: ["A", "n", "v"] });
+    if (!positional.length) return err("Nothing specified, nothing added.");
+    for (const file of positional) {
+      // "." の場合は repoRoot 配下を全て add
+      if (file === ".") {
+        const working = gitSnapshotWorkingTree(ctx.vfs, repoRoot);
+        for (const f of Object.keys(working)) state.staged[f] = working[f];
+        continue;
+      }
+      const abs = ctx.vfs.absolutize(file);
+      const rel = abs.startsWith(repoRoot + "/") ? abs.slice(repoRoot.length + 1) : file;
+      const r = ctx.vfs.readFile(abs);
+      if (r.error) return err("fatal: pathspec '" + file + "' did not match any files");
+      state.staged[rel] = r.content;
+    }
+    return ok();
+  }
+
+  function gitCommit(ctx, args, repo) {
+    const { state } = repo;
+    let msg = null;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-m" || args[i] === "--message") msg = args[++i];
+      else if (args[i].startsWith("--message=")) msg = args[i].slice(10);
+    }
+    if (!msg) return err("error: -m '<msg>' を指定してください (この擬似 git はエディタ起動による commit はサポートしません)");
+    const stagedKeys = Object.keys(state.staged);
+    if (stagedKeys.length === 0) {
+      return err("nothing to commit, working tree clean");
+    }
+    const parentHash = gitHeadCommit(state);
+    const parentTree = parentHash && state.commits[parentHash] ? state.commits[parentHash].tree : {};
+    const newTree = Object.assign({}, parentTree);
+    for (const k of stagedKeys) newTree[k] = state.staged[k];
+    const hash = gitMakeHash();
+    state.commits[hash] = {
+      parent:  parentHash,
+      author:  (ctx.vfs.user || "user") + " <" + (ctx.vfs.user || "user") + "@" + (ctx.vfs.hostname || "shell") + ">",
+      date:    new Date().toUTCString(),
+      message: msg,
+      tree:    newTree
+    };
+    if (state.head.startsWith("@")) {
+      state.head = "@" + hash;   // detached のまま進める
+    } else {
+      state.branches[state.head] = hash;
+    }
+    state.staged = {};
+    const changed = stagedKeys.length;
+    return ok("[" + (state.head.startsWith("@") ? "detached HEAD" : state.head) + " " + hash.slice(0, 7) + "] " + msg + "\n" +
+              " " + changed + " file" + (changed === 1 ? "" : "s") + " changed\n");
+  }
+
+  async function gitPush(ctx, args, repo) {
+    const { state } = repo;
+    const remote = state.remoteUrl ? ctx.vfs.gitRepos[state.remoteUrl] : null;
+    let extraOut = "";
+    if (remote) {
+      // fast-forward 前提でブランチ/タグ/コミットを書き戻し
+      remote.branches = remote.branches || {};
+      remote.tags     = remote.tags     || {};
+      remote.commits  = remote.commits  || {};
+      Object.assign(remote.commits, state.commits);
+      Object.assign(remote.branches, state.branches);
+      Object.assign(remote.tags, state.tags);
+      if (typeof remote.onPush === "function") {
+        try {
+          const res = await remote.onPush(state, ctx);
+          if (typeof res === "string") {
+            // 各行を "remote: " プレフィックスで出力
+            extraOut = res.split("\n").map(l => l ? "remote: " + l : l).join("\n");
+            if (!extraOut.endsWith("\n")) extraOut += "\n";
+          }
+        } catch (e) {
+          return err("error: server-side push hook failed: " + (e && e.message ? e.message : String(e)));
+        }
+      }
+    }
+    return {
+      stdout: "",
+      stderr:
+        (extraOut || "") +
+        "To " + (state.remoteUrl || "<unknown>") + "\n" +
+        "   <fast-forward>  " + (state.head.startsWith("@") ? "HEAD" : state.head) +
+        " -> " + (state.head.startsWith("@") ? "HEAD" : state.head) + "\n",
+      exitCode: 0
+    };
+  }
+
   // ---------- 各コマンド ----------
   const COMMANDS = {
 
@@ -534,6 +1050,64 @@
             r.node.mtime = new Date();
           }
         }
+        return ok();
+      }
+    },
+
+    chmod: {
+      description: "ファイルのパーミッション (mode) を変更",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["R", "v"] });
+        if (positional.length < 2) return err("chmod: 用法: chmod <mode> <file>...");
+        const modeArg = positional[0];
+        const targets = positional.slice(1);
+        // 8 進数モード (例: 600, 4755) のみ実装。シンボリック (u+x 等) は未対応。
+        if (!/^[0-7]+$/.test(modeArg)) {
+          return err("chmod: " + modeArg + ": シンボリックモード (u+x 等) は未対応です。8 進数で指定してください。");
+        }
+        const newMode = parseInt(modeArg, 8);
+        let out = "";
+        function apply(path) {
+          const r = ctx.vfs.lstat(path);
+          if (r.error) { out += "chmod: " + path + ": " + r.error + "\n"; return; }
+          // 所有者か root のみが mode 変更可
+          if (ctx.vfs.user !== "root" && r.node.owner !== ctx.vfs.user) {
+            out += "chmod: changing permissions of '" + path + "': Operation not permitted\n";
+            return;
+          }
+          r.node.mode = newMode;
+          if (flags.v) out += "mode of '" + path + "' changed to 0" + newMode.toString(8) + "\n";
+          if (flags.R && r.node.type === "dir") {
+            for (const name of Object.keys(r.node.children)) apply(path + "/" + name);
+          }
+        }
+        for (const t of targets) apply(t);
+        return out ? { stdout: out, stderr: "", exitCode: 0 } : ok();
+      }
+    },
+
+    chown: {
+      description: "ファイルの所有者 / グループを変更 (root 専用)",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["R", "v"] });
+        if (positional.length < 2) return err("chown: 用法: chown <owner>[:<group>] <file>...");
+        const spec = positional[0];
+        const targets = positional.slice(1);
+        let owner = spec, group = null;
+        if (spec.includes(":")) { [owner, group] = spec.split(":"); }
+        if (ctx.vfs.user !== "root") {
+          return err("chown: changing ownership: Operation not permitted (root 専用)");
+        }
+        function apply(path) {
+          const r = ctx.vfs.lstat(path);
+          if (r.error) return;
+          r.node.owner = owner;
+          if (group) r.node.group = group;
+          if (flags.R && r.node.type === "dir") {
+            for (const name of Object.keys(r.node.children)) apply(path + "/" + name);
+          }
+        }
+        for (const t of targets) apply(t);
         return ok();
       }
     },
@@ -1338,6 +1912,11 @@
               const saved = ctx2.shell._interactive;
               ctx2.shell._interactive = null;
               const res = await ctx2.shell.run(sub);
+              // 子コマンドが対話モード (less/vim 等) を開始した場合は入れ子不可
+              if (ctx2.shell._interactive) {
+                ctx2.shell._interactive = saved;
+                return { output: "(less) ! 内で対話コマンド (less/vim 等) は起動できません\n", exit: false };
+              }
               ctx2.shell._interactive = saved;
               return { output: (res.output || "") + "(less に戻ります)\n", exit: false };
             }
@@ -1395,6 +1974,10 @@
               const saved = ctx2.shell._interactive;
               ctx2.shell._interactive = null;
               const res = await ctx2.shell.run(sub);
+              if (ctx2.shell._interactive) {
+                ctx2.shell._interactive = saved;
+                return { output: "(vim) :! 内で対話コマンド (less/vim 等) は起動できません\n", exit: false };
+              }
               ctx2.shell._interactive = saved;
               return { output: (res.output || "") + "(Press ENTER) (vim に戻ります)\n", exit: false };
             }
@@ -1511,25 +2094,29 @@
       }
     },
 
-    // SSH 鍵認証 (擬似)。vfs.sshKeys["user@host"] = { authorizedKey, onAuth }
+    // SSH 鍵認証 (擬似)。vfs.sshKeys["user@host"] = { authorizedKey, onAuth, remoteFs, autoExit }
     // 鍵が一致したら onAuth ハンドラの返り値を welcome メッセージと共に表示する。
+    // リモートコマンドが指定された場合: remoteFs を使って一時 Shell を立て、そこで実行。
     ssh: {
       description: "SSH リモートログイン (擬似: 鍵認証のみ対応)",
       async run(ctx) {
-        // ssh [-i keyfile] [-p port] [-o opt=val] user@host
+        // ssh [-i keyfile] [-p port] [-o opt=val] user@host [remote command args...]
         let identityFile = null;
         let port = 22;
         let target = null;
+        const remoteCmd = [];   // target 以降の引数 = リモートで実行するコマンド
         const args = ctx.args.slice();
         for (let i = 0; i < args.length; i++) {
           const a = args[i];
+          if (target) { remoteCmd.push(a); continue; }            // target が決まった後は全てリモートコマンド
           if (a === "-i") { identityFile = args[++i]; continue; }
           if (a === "-p") { port = parseInt(args[++i], 10); continue; }
           if (a === "-o") { i++; continue; }                      // -o option=value は無視
+          if (a === "-t" || a === "-T" || a === "-q" || a === "-v" || a === "-N") continue;
           if (a.startsWith("-i") && a.length > 2) { identityFile = a.slice(2); continue; }
           if (a.startsWith("-p") && a.length > 2) { port = parseInt(a.slice(2), 10); continue; }
           if (a.startsWith("-")) continue;                        // 未対応フラグは無視
-          if (!target) target = a;
+          target = a;
         }
         if (!target) return err("ssh: user@host を指定してください (例: ssh -i key bandit14@localhost)");
         if (!target.includes("@")) return err("ssh: 形式は user@host です");
@@ -1574,6 +2161,40 @@
         }
 
         // 認証成功
+
+        // リモートコマンドが指定されていれば、相手側の VFS で実行する。
+        // これにより .bashrc のような対話初期化スクリプトをバイパスできる (Lv18 想定)。
+        if (remoteCmd.length > 0) {
+          if (!config.remoteFs) {
+            return err("ssh: " + target + ": 相手側のファイルシステム (remoteFs) が設定されていません");
+          }
+          const remoteVfs = new window.VFS(config.remoteFs);
+          const remoteShell = new window.Shell({ vfs: remoteVfs });
+          remoteShell.registerMany(window.SHELL_COMMANDS);
+          // リモートコマンドを 1 行に組み立てて run() に渡す (クォートは保持できないので簡易)
+          // 引数に空白を含む場合に備えて、空白を含むトークンはシングルクォートで括る
+          const line = remoteCmd.map(t => /[\s'"$`\\]/.test(t) ? "'" + t.replace(/'/g, "'\\''") + "'" : t).join(" ");
+          try {
+            const r = await remoteShell.run(line);
+            return ok(r.output || "");
+          } catch (e) {
+            return err("ssh: リモートコマンド実行エラー: " + (e && e.message ? e.message : String(e)));
+          }
+        }
+
+        // 対話ログイン (リモートコマンドなし)。autoExit が true ならログイン直後に切断される。
+        if (config.autoExit) {
+          let exitBanner = "";
+          if (typeof config.onAuth === "function") {
+            try { exitBanner = await config.onAuth(ctx); }
+            catch (e) { exitBanner = "(onAuth エラー: " + (e && e.message ? e.message : String(e)) + ")\n"; }
+          }
+          return ok(
+            (exitBanner || "") +
+            "Connection to " + target.split("@")[1] + " closed.\n"
+          );
+        }
+
         let body = "";
         if (typeof config.onAuth === "function") {
           try { body = await config.onAuth(ctx); }
@@ -1756,6 +2377,120 @@
         }
         out += "Nmap done: 1 IP address (1 host up) scanned\n";
         return ok(out);
+      }
+    },
+
+    // crontab: -l で現在のユーザーの cron 定義を表示する。
+    // 実 cron デーモンは仮想化しないが、Lv21-23 ではこのコマンドと
+    // /etc/cron.d/ 等の事前配置ファイルを読むことで「cron が何を動かしているか」を辿れる。
+    crontab: {
+      description: "現在のユーザーの cron 定義を一覧 (-l)",
+      run(ctx) {
+        const { flags, positional } = parseFlags(ctx.args, { boolean: ["l", "e", "r"], string: ["u"] });
+        // -u user で別ユーザーの crontab を見る (実 cron では root のみ。教育用は寛容に)
+        const user = flags.u || ctx.vfs.user;
+        if (flags.r) {
+          if (ctx.vfs.crontabs && ctx.vfs.crontabs[user]) delete ctx.vfs.crontabs[user];
+          return ok();
+        }
+        if (flags.e) {
+          return err("crontab: -e は対話編集モードです。代わりに `crontab <ファイル>` を使うか、vim で /var/spool/cron/crontabs/" + user + " を編集してください");
+        }
+        if (flags.l || (!positional.length && !flags.e && !flags.r)) {
+          const entries = (ctx.vfs.crontabs && ctx.vfs.crontabs[user]) || "";
+          if (!entries) return err("no crontab for " + user);
+          return ok(entries.endsWith("\n") ? entries : entries + "\n");
+        }
+        // crontab <file>: ファイルから cron を登録
+        const r = ctx.vfs.readFile(positional[0]);
+        if (r.error) return err("crontab: " + positional[0] + ": " + r.error);
+        ctx.vfs.crontabs[user] = r.content;
+        return ok();
+      }
+    },
+
+    md5sum: {
+      description: "MD5 ハッシュを計算 (ファイル or 標準入力)",
+      run(ctx) {
+        const { positional } = parseFlags(ctx.args, {});
+        if (!positional.length) {
+          const text = ctx.stdin || "";
+          return ok(md5(text) + "  -\n");
+        }
+        let out = "";
+        for (const p of positional) {
+          if (p === "-") {
+            out += md5(ctx.stdin || "") + "  -\n";
+            continue;
+          }
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("md5sum: " + p + ": " + r.error);
+          out += md5(r.content) + "  " + p + "\n";
+        }
+        return ok(out);
+      }
+    },
+
+    sha256sum: {
+      description: "SHA-256 ハッシュを計算",
+      async run(ctx) {
+        const { positional } = parseFlags(ctx.args, {});
+        if (!positional.length) {
+          return ok((await sha256(ctx.stdin || "")) + "  -\n");
+        }
+        let out = "";
+        for (const p of positional) {
+          if (p === "-") { out += (await sha256(ctx.stdin || "")) + "  -\n"; continue; }
+          const r = ctx.vfs.readFile(p);
+          if (r.error) return err("sha256sum: " + p + ": " + r.error);
+          out += (await sha256(r.content)) + "  " + p + "\n";
+        }
+        return ok(out);
+      }
+    },
+
+    git: {
+      description: "git のサブコマンド (clone/log/show/branch/checkout/tag/add/commit/push/status)",
+      async run(ctx) {
+        const sub = ctx.args[0];
+        const rest = ctx.args.slice(1);
+        if (!sub || sub === "--help" || sub === "-h") {
+          return ok(
+            "usage: git <command> [<args>]\n\n" +
+            "  clone     リポジトリをクローン\n" +
+            "  log       コミット履歴を表示\n" +
+            "  show      コミットの内容と差分を表示\n" +
+            "  branch    ブランチ一覧 / 作成 / 削除\n" +
+            "  checkout  ブランチ・タグ・コミットの切り替え\n" +
+            "  tag       タグ一覧 / 作成\n" +
+            "  status    作業ツリーの状態\n" +
+            "  add       ステージング\n" +
+            "  commit    コミット (-m <msg> 必須)\n" +
+            "  push      リモートに送る\n"
+          );
+        }
+
+        const KNOWN = ["clone","log","show","branch","checkout","tag","status","add","commit","push"];
+        if (KNOWN.indexOf(sub) < 0) {
+          return err("git: '" + sub + "' is not a git command. See 'git --help'.");
+        }
+
+        if (sub === "clone") return await gitClone(ctx, rest);
+
+        const repo = gitFindRepoRoot(ctx.vfs);
+        if (!repo) return err("fatal: not a git repository (or any of the parent directories): .git");
+
+        switch (sub) {
+          case "log":      return gitLog(ctx, rest, repo);
+          case "show":     return gitShow(ctx, rest, repo);
+          case "branch":   return gitBranch(ctx, rest, repo);
+          case "checkout": return gitCheckout(ctx, rest, repo);
+          case "tag":      return gitTag(ctx, rest, repo);
+          case "status":   return gitStatus(ctx, rest, repo);
+          case "add":      return gitAdd(ctx, rest, repo);
+          case "commit":   return gitCommit(ctx, rest, repo);
+          case "push":     return await gitPush(ctx, rest, repo);
+        }
       }
     }
   };

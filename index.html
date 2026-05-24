@@ -14,6 +14,8 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">本文へスキップ</a>
+
 <header class="nav">
   <div class="nav__inner">
     <a class="nav__brand" href="index.html">
@@ -29,7 +31,7 @@
   </div>
 </header>
 
-<main>
+<main id="main">
 
   <section class="hero">
     <div class="hero__inner">
@@ -52,8 +54,8 @@
           <div class="index-progress__title">あなたの進捗</div>
           <div class="index-progress__sub" id="progressSub">読み込み中…</div>
         </div>
-        <div class="progress" aria-hidden="true">
-          <div class="progress__bar">
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="35" aria-valuenow="0" aria-valuetext="0 / 35 レベルクリア" id="progressBar">
+          <div class="progress__bar" aria-hidden="true">
             <div class="progress__fill" id="progressFill" style="width: 0%"></div>
           </div>
           <div class="progress__label" id="progressLabel">0 / 35</div>
@@ -107,9 +109,15 @@
     const cleared = Progress.getClearedCount();
     const lastLevel = Progress.state.lastLevel;
 
-    // 進捗バー
+    // 進捗バー (視覚 + a11y 両方更新)
     document.getElementById("progressFill").style.width = (cleared / total * 100).toFixed(1) + "%";
     document.getElementById("progressLabel").textContent = cleared + " / " + total;
+    const bar = document.getElementById("progressBar");
+    if (bar) {
+      bar.setAttribute("aria-valuemax", String(total));
+      bar.setAttribute("aria-valuenow", String(cleared));
+      bar.setAttribute("aria-valuetext", cleared + " / " + total + " レベルクリア");
+    }
     const sub = document.getElementById("progressSub");
     if (cleared === 0) {
       sub.textContent = "Level 0 から始めましょう。";
@@ -133,12 +141,15 @@
     for (let i = 0; i < total; i++) {
       const lv = LEVELS[i];
       if (!lv) continue;
+      const cleared_i = Progress.isCleared(i);
       const a = document.createElement("a");
       a.className = "level-card";
       a.href = "level.html?l=" + i;
-      a.dataset.cleared = Progress.isCleared(i) ? "true" : "false";
+      a.dataset.cleared = cleared_i ? "true" : "false";
+      // クリア済みのときは Level 名の前に「クリア済み」と読み上げ。未クリア時はバッジ非表示 + aria-hidden。
+      if (cleared_i) a.setAttribute("aria-label", "クリア済み: Level " + i + " " + lv.title);
       a.innerHTML = `
-        <span class="level-card__badge" aria-label="クリア済み">✓</span>
+        <span class="level-card__badge" aria-hidden="${cleared_i ? "false" : "true"}">✓</span>
         <div class="level-card__num">LEVEL ${String(i).padStart(2, "0")}</div>
         <div class="level-card__title">${lv.title}</div>
         <div class="level-card__theme">${lv.theme}</div>

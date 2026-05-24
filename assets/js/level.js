@@ -157,7 +157,8 @@ Last login: ${dStr} from ${fakeIp}
     // VFS とシェルの構築
     const fsSpec = data.fs || { user: "guest", home: "/home/guest", cwd: "/home/guest" };
     const vfs = new VFS(fsSpec);
-    const shell = new Shell({ vfs });
+    // レベル定義側で shellOptions ({restricted, shellName}) を指定できる (Lv32 等の制限シェル用)
+    const shell = new Shell(Object.assign({ vfs }, fsSpec.shellOptions || {}));
     shell.registerMany(window.SHELL_COMMANDS);
 
     new Terminal("#termHost", shell, {
@@ -178,10 +179,17 @@ Last login: ${dStr} from ${fakeIp}
         fb.textContent = "正解です。次のレベルへ進みます…";
         fb.className = "password-gate__feedback is-success";
         Progress.markCleared(n);
+        // 軽いクリア演出: パスワードゲートに success クラスを足して短い border-glow を 1 回流す
+        const gate = document.querySelector(".password-gate");
+        if (gate) gate.classList.add("password-gate--success");
+        if (window.App && typeof window.App.toast === "function") {
+          window.App.toast("Level " + n + " クリア");
+        }
+        // SR が「正解です」と読み終わる時間を確保 (900ms → 1400ms)
         setTimeout(() => {
           if (n + 1 < total) location.href = "level.html?l=" + (n + 1);
           else location.href = "index.html";
-        }, 900);
+        }, 1400);
       } else {
         fb.textContent = "違うようです。仮想ターミナル内をもう一度探してみましょう。";
         fb.className = "password-gate__feedback is-error";

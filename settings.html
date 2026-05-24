@@ -14,6 +14,8 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">本文へスキップ</a>
+
 <header class="nav">
   <div class="nav__inner">
     <a class="nav__brand" href="index.html">
@@ -29,7 +31,7 @@
   </div>
 </header>
 
-<main>
+<main id="main">
   <section class="section">
     <div class="container container--narrow">
       <div class="eyebrow">Settings</div>
@@ -44,8 +46,8 @@
           <h2 class="settings-section__title">現在の進捗</h2>
           <p class="settings-section__sub">このブラウザに保存されている学習進捗の状況です。</p>
           <div style="margin-top: var(--s-4);">
-            <div class="progress">
-              <div class="progress__bar">
+            <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="35" aria-valuenow="0" aria-valuetext="0 / 35 レベルクリア" id="sBar">
+              <div class="progress__bar" aria-hidden="true">
                 <div class="progress__fill" id="sFill" style="width: 0%"></div>
               </div>
               <div class="progress__label" id="sLabel">0 / 35</div>
@@ -120,6 +122,7 @@
   const fillEl   = $("sFill");
   const labelEl  = $("sLabel");
   const statusEl = $("sStatus");
+  const barEl    = $("sBar");
 
   function refreshProgress() {
     const total = Progress.getTotalLevels();
@@ -127,6 +130,11 @@
     const last = Progress.state.lastLevel;
     fillEl.style.width = (cleared / total * 100).toFixed(1) + "%";
     labelEl.textContent = cleared + " / " + total;
+    if (barEl) {
+      barEl.setAttribute("aria-valuemax", String(total));
+      barEl.setAttribute("aria-valuenow", String(cleared));
+      barEl.setAttribute("aria-valuetext", cleared + " / " + total + " レベルクリア");
+    }
     if (cleared === 0) {
       statusEl.textContent = "まだクリアしたレベルはありません。";
     } else if (cleared >= total) {

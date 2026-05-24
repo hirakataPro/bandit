@@ -30,6 +30,11 @@
     // 対話モード (less/vim 等): { handler, prompt, name } または null
     // handler は async (line, ctx) → { output, exit } を返す。
     this._interactive = null;
+    // 制限シェルモード: "uppercase" のとき入力行を大文字化してから parse する。
+    // Lv32 (制限シェル) を再現するため。$0 のような展開は uppercase で潰されないので脱出可能。
+    this.restricted = (opts && opts.restricted) || null;
+    // $0 が指す値 (デフォルトはシェル名)。制限シェルでは "$0" の展開でこの値が出る。
+    this._shellName = (opts && opts.shellName) || "shell";
   }
 
   Shell.prototype.register = function (name, cmd) {
@@ -46,6 +51,7 @@
     if (name === "?") return String(this.lastExit);
     if (name === "PWD") return this.vfs.cwd;
     if (name === "OLDPWD") return this.oldcwd || this.vfs.cwd;
+    if (name === "0") return this._shellName;
     return this.env[name] != null ? String(this.env[name]) : "";
   };
 
@@ -91,9 +97,96 @@
   /**
    * 入力行を実行する。返り値: { exitCode, output: 連結された stdout/stderr 行 }
    */
+  // $(cmd) を実行結果に置き換える前処理。bash のコマンド置換と同様、末尾の改行を 1 つ削る。
+  // ネスト対応 (中括弧の深さを数えて対応)。
+  Shell.prototype._expandCmdSubst = async function (line) {
+    let result = "";
+    let i = 0;
+    while (i < line.length) {
+      if (line[i] === "$" && line[i + 1] === "(") {
+        let depth = 1, j = i + 2;
+        while (j < line.length && depth > 0) {
+          if (line[j] === "(") depth++;
+          else if (line[j] === ")") depth--;
+          if (depth > 0) j++;
+        }
+        if (depth !== 0) { result += line[i]; i++; continue; }
+        const inner = await this._expandCmdSubst(line.slice(i + 2, j));
+        // サブシェル実行: ヒストリには積まず、lastExit のみ反映
+        const subRes = await this._runRaw(inner);
+        let out = (subRes.output || "").replace(/\n+$/, "");
+        result += out;
+        i = j + 1;
+        continue;
+      }
+      // 一重バッククォート `cmd` 形式の簡易対応
+      if (line[i] === "`") {
+        const j = line.indexOf("`", i + 1);
+        if (j < 0) { result += line[i]; i++; continue; }
+        const inner = await this._expandCmdSubst(line.slice(i + 1, j));
+        const subRes = await this._runRaw(inner);
+        let out = (subRes.output || "").replace(/\n+$/, "");
+        result += out;
+        i = j + 1;
+        continue;
+      }
+      result += line[i];
+      i++;
+    }
+    return result;
+  };
+
+  // ヒストリに積まずに 1 行を実行する内部経路 (コマンド置換の再帰用)
+  Shell.prototype._runRaw = async function (line) {
+    const self = this;
+    const getVar = function (name) { return self.getVar(name); };
+    getVar.__runCmdSub = function () { return ""; };   // 二重展開済みなので使わない
+    const parsed = window.ShellParser.parse(line, getVar);
+    if (parsed.error) {
+      this.lastExit = 2;
+      return { exitCode: 2, output: "shell: 構文エラー: " + parsed.error + "\n" };
+    }
+    let out = "", lastCode = 0;
+    for (const item of parsed.ast.items) {
+      if (item._skip) continue;
+      const r = await this._runPipeline(item.pipeline);
+      out += r.output;
+      lastCode = r.exitCode;
+      this.lastExit = lastCode;
+      const nextIdx = parsed.ast.items.indexOf(item) + 1;
+      if (nextIdx < parsed.ast.items.length) {
+        if (item.op === "and" && lastCode !== 0) {
+          for (let k = nextIdx; k < parsed.ast.items.length; k++) {
+            parsed.ast.items[k]._skip = true;
+            if (parsed.ast.items[k].op === "semi") break;
+          }
+        } else if (item.op === "or" && lastCode === 0) {
+          for (let k = nextIdx; k < parsed.ast.items.length; k++) {
+            parsed.ast.items[k]._skip = true;
+            if (parsed.ast.items[k].op === "semi") break;
+          }
+        }
+      }
+    }
+    return { exitCode: lastCode, output: out };
+  };
+
   Shell.prototype.run = async function (line) {
     line = String(line || "").trim();
     if (!line) return { exitCode: 0, output: "" };
+
+    // 制限シェル: 入力行を変換してから処理する。
+    // "uppercase" モード: 入力を大文字化。コマンド名 (ls/cd/cat) は LS/CD/CAT になって
+    // 探せなくなる。$0 / $SHELL のような変数展開は uppercase の前に行われずそのまま生き残るため、
+    // $0 や $SHELL 等で本物のシェル名を引き出して脱出するのが定石。
+    if (this.restricted === "uppercase") {
+      line = line.toUpperCase();
+    }
+
+    // コマンド置換 $(cmd) と `cmd` をここで先に解決する
+    if (line.includes("$(") || line.includes("`")) {
+      line = await this._expandCmdSubst(line);
+    }
 
     // ヒストリ
     this.history.push(line);
@@ -273,6 +366,63 @@
     if (name === "unalias") {
       for (const a of args) delete this.aliases[a];
       return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    // 変数代入のみ (例: pw=value)。名前にコマンドが続いていなければ env に書き込んで終了。
+    // bash の `var=value cmd args` のような inline assignment は未対応 (Bandit には不要)。
+    {
+      const eq = name.indexOf("=");
+      if (eq > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.slice(0, eq))) {
+        this.setVar(name.slice(0, eq), name.slice(eq + 1));
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+    }
+
+    // パス形式 (./foo, /usr/bin/foo, ../foo) は VFS から仮想バイナリを直接実行する。
+    // ファイルノードに exec 関数が付いていれば、それを起動 (setuid 対応)。
+    if (name.startsWith("./") || name.startsWith("../") || name.startsWith("/")) {
+      const r = this.vfs.stat(name);
+      if (r.error) {
+        return { stdout: "", stderr: "bash: " + name + ": No such file or directory\n", exitCode: 127 };
+      }
+      if (r.node.type === "dir") {
+        return { stdout: "", stderr: "bash: " + name + ": Is a directory\n", exitCode: 126 };
+      }
+      if (!this.vfs.canExecute(r.node)) {
+        return { stdout: "", stderr: "bash: " + name + ": Permission denied\n", exitCode: 126 };
+      }
+      if (typeof r.node.exec !== "function") {
+        // 実行ビットはあるが実体がないファイル: 本物の bash は ENOEXEC (Exec format error)
+        return { stdout: "", stderr: "bash: " + name + ": cannot execute binary file: Exec format error\n", exitCode: 126 };
+      }
+      const setuid = (r.node.mode & 0o4000) !== 0;
+      const asUser = setuid ? r.node.owner : this.vfs.user;
+      const savedUser = this.vfs.user;
+      const savedGroups = this.vfs.groups;
+      if (setuid) {
+        this.vfs.user = asUser;
+        this.vfs.groups = [asUser];
+      }
+      const ctx = {
+        shell: this,
+        vfs: this.vfs,
+        env: this.env,
+        stdin: stdin || "",
+        args,
+        isTTY: !!opts.isTTY
+      };
+      let result;
+      try {
+        result = await r.node.exec(ctx, args, asUser);
+      } catch (e) {
+        result = { stdout: "", stderr: name + ": exec error: " + (e && e.message ? e.message : String(e)) + "\n", exitCode: 1 };
+      } finally {
+        if (setuid) {
+          this.vfs.user = savedUser;
+          this.vfs.groups = savedGroups;
+        }
+      }
+      return Object.assign({ stdout: "", stderr: "", exitCode: 0 }, result || {});
     }
 
     // レジストリから探す

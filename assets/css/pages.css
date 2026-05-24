@@ -66,7 +66,8 @@
 
 .sheet-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  /* 狭幅 (320px 端末) でも minmax の下限が画面を超えないよう min() で抑える */
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: var(--s-4);
   padding: var(--s-6) 0 var(--s-9);
 }

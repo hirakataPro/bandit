@@ -27,6 +27,14 @@
   .term { height: 380px; }
 }
 
+/* モバイル: 細幅で行が右に伸びすぎないよう font をやや縮め、resize ハンドルは無効化 */
+@media (max-width: 480px) {
+  .term { height: clamp(320px, 60dvh, 480px); font-size: 13px; }
+}
+@media (pointer: coarse) {
+  .term { resize: none; }   /* タッチ端末では resize ハンドルが指で掴みにくいため非表示 */
+}
+
 .term__chrome {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -65,6 +73,10 @@
 
 .term__body {
   flex: 1;
+  /* flex 子要素の min-height: auto を無効化しないと、内側コンテンツが伸びたとき
+     bodyEl が .term の高さを超えて伸び、overflow-y: auto の内部スクロールが効かず、
+     代わりに焦点保持のためブラウザがページ全体をスクロールしてしまう。 */
+  min-height: 0;
   overflow-y: auto;
   padding: 14px 16px 4px;
   font-size: 14px;
@@ -157,6 +169,11 @@
   0%   { opacity: 0.85; }
   50%  { opacity: 0; }
   100% { opacity: 0.85; }
+}
+
+/* prefers-reduced-motion: caret 点滅を停止 (WCAG 2.3.3 配慮) */
+@media (prefers-reduced-motion: reduce) {
+  .term__caret { animation: none; opacity: 0.85; }
 }
 
 .term.is-busy .term__line { opacity: 0.6; }
@@ -264,6 +281,11 @@
   border-radius: var(--r-2);
   padding: 12px 14px;
 }
+@media (max-width: 480px) {
+  .password-gate__row { flex-direction: column; }
+  .password-gate__row .btn { width: 100%; }
+  .password-gate__input { min-width: 0; }
+}
 .password-gate__input:focus {
   outline: none;
   border-color: var(--accent);
@@ -276,6 +298,20 @@
 }
 .password-gate__feedback.is-error   { color: var(--accent-danger); }
 .password-gate__feedback.is-success { color: var(--accent-success); }
+
+/* クリア時の控えめなボーダー演出 (Apple 風に派手すぎないように) */
+.password-gate--success {
+  animation: gate-success 1.2s var(--ease-out) 1;
+  border-color: rgba(48, 209, 88, 0.5);
+}
+@keyframes gate-success {
+  0%   { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.5); }
+  35%  { box-shadow: 0 0 0 8px rgba(48, 209, 88, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .password-gate--success { animation: none; }
+}
 
 /* レベル間ナビ */
 .level-nav {

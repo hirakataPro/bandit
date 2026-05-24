@@ -1,0 +1,276 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_E_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  function notContains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) >= 0)
+      throw new Error((m || "should NOT contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave E integration test (ssh remote / setuid / restricted) ===");
+
+  // ---------- E-1: ssh リモートコマンド (Lv18) ----------
+
+  const KEY = "-----BEGIN RSA PRIVATE KEY-----\nFAKEKEY18\n-----END RSA PRIVATE KEY-----\n";
+  const NEXT_PW_18 = "bypass-bashrc-by-direct-command-18";
+
+  function newLv18Shell() {
+    const spec = {
+      user: "bandit17", hostname: "training-server",
+      home: "/home/bandit17", cwd: "/home/bandit17",
+      files: {
+        "/home/bandit17/sshkey.private": {
+          type: "file", owner: "bandit17", group: "bandit17", mode: "0600",
+          content: KEY
+        }
+      },
+      sshKeys: {
+        "bandit18@localhost": {
+          authorizedKey: KEY,
+          autoExit: true,
+          onAuth: () => "shell-server: .bashrc immediately exits\n",
+          remoteFs: {
+            user: "bandit18", hostname: "training-server",
+            home: "/home/bandit18", cwd: "/home/bandit18",
+            files: {
+              "/home/bandit18/readme": {
+                type: "file", owner: "bandit18", group: "bandit18", mode: "0640",
+                content: NEXT_PW_18 + "\n"
+              }
+            }
+          }
+        }
+      }
+    };
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("Lv18: ssh で通常ログインすると autoExit で即切断", async () => {
+    const sh = newLv18Shell();
+    const r = await sh.run("ssh -i sshkey.private bandit18@localhost");
+    contains(r.output, "Connection to localhost closed");
+    notContains(r.output, NEXT_PW_18, "通常ログインではパスワードは見えない");
+  });
+
+  await test("Lv18: ssh user@host cat readme で .bashrc バイパス", async () => {
+    const sh = newLv18Shell();
+    const r = await sh.run("ssh -i sshkey.private bandit18@localhost cat readme");
+    contains(r.output, NEXT_PW_18);
+  });
+
+  await test("Lv18: ssh user@host whoami がリモートユーザーを返す", async () => {
+    const sh = newLv18Shell();
+    const r = await sh.run("ssh -i sshkey.private bandit18@localhost whoami");
+    contains(r.output, "bandit18");
+  });
+
+  await test("Lv18: remoteFs 未設定でリモートコマンド → エラー", async () => {
+    const spec = {
+      user: "bandit17", home: "/home/bandit17", cwd: "/home/bandit17",
+      files: { "/home/bandit17/k": { type: "file", owner: "bandit17", mode: "0600", content: KEY } },
+      sshKeys: { "x@y": { authorizedKey: KEY } }
+    };
+    const sh = new window.Shell({ vfs: new window.VFS(spec) });
+    sh.registerMany(window.SHELL_COMMANDS);
+    const r = await sh.run("ssh -i k x@y whoami");
+    contains(r.output, "remoteFs");
+  });
+
+  // ---------- E-2: setuid バイナリ (Lv19) ----------
+
+  const NEXT_PW_19 = "setuid-runs-as-the-binary-owner-19";
+
+  function newLv19Shell() {
+    const spec = {
+      user: "bandit19", hostname: "training-server",
+      home: "/home/bandit19", cwd: "/home/bandit19",
+      files: {
+        "/etc/bandit_pass/bandit20": {
+          type: "file", owner: "bandit20", group: "bandit20", mode: "0400",
+          content: NEXT_PW_19 + "\n"
+        },
+        "/home/bandit19/bandit20-do": {
+          type: "file", owner: "bandit20", group: "bandit20",
+          mode: "4755",   // setuid + rwxr-xr-x
+          content: "[ELF binary placeholder]",
+          exec: async (ctx, args) => {
+            if (!args.length) return { stdout: "", stderr: "Run a program: ./bandit20-do <command>\n", exitCode: 1 };
+            // 受け取ったコマンドをそのまま (setuid 切り替え済みの) シェルで実行
+            return await ctx.shell._execOne(args[0], args.slice(1), ctx.stdin || "", { isTTY: false });
+          }
+        },
+        "/home/bandit19/no-exec-bit": {
+          type: "file", owner: "bandit20", group: "bandit20", mode: "4644",
+          content: "no x", exec: async () => ({ stdout: "ran\n", stderr: "", exitCode: 0 })
+        },
+        "/home/bandit19/no-setuid": {
+          type: "file", owner: "bandit20", group: "bandit20", mode: "0755",
+          content: "[ELF]",
+          exec: async (ctx, args) => {
+            return await ctx.shell._execOne(args[0], args.slice(1), ctx.stdin || "", { isTTY: false });
+          }
+        }
+      }
+    };
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("Lv19: 通常 cat では他人のパスワードは読めない", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("cat /etc/bandit_pass/bandit20");
+    contains(r.output, "権限がありません");
+  });
+
+  await test("Lv19: ./bandit20-do cat で setuid 越しに読める", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("./bandit20-do cat /etc/bandit_pass/bandit20");
+    contains(r.output, NEXT_PW_19);
+  });
+
+  await test("Lv19: setuid なしで同じことをすると権限エラー", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("./no-setuid cat /etc/bandit_pass/bandit20");
+    contains(r.output, "権限がありません");
+  });
+
+  await test("Lv19: 実行ビットがないと Permission denied", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("./no-exec-bit");
+    contains(r.output, "Permission denied");
+  });
+
+  await test("Lv19: 存在しないパスは No such file", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("./missing");
+    contains(r.output, "No such file");
+  });
+
+  await test("Lv19: setuid 中に whoami がオーナー名を返し、終了後は元に戻る", async () => {
+    const sh = newLv19Shell();
+    const r1 = await sh.run("whoami");
+    contains(r1.output, "bandit19", "通常時は bandit19");
+    const r2 = await sh.run("./bandit20-do whoami");
+    contains(r2.output, "bandit20", "setuid 中は bandit20");
+    const r3 = await sh.run("whoami");
+    contains(r3.output, "bandit19", "終了後は bandit19 に戻る");
+  });
+
+  await test("Lv19: ディレクトリは実行できない", async () => {
+    const sh = newLv19Shell();
+    const r = await sh.run("./");   // カレントディレクトリそのもの
+    contains(r.output, "Is a directory");
+  });
+
+  // ---------- E-3: 制限シェル (Lv32) ----------
+
+  const NEXT_PW_32 = "uppercase-shell-escaped-via-dollar-zero";
+
+  function newLv32Shell() {
+    const spec = {
+      user: "bandit32", hostname: "training-server",
+      home: "/home/bandit32", cwd: "/home/bandit32",
+      files: {
+        "/etc/bandit_pass/bandit33": {
+          type: "file", owner: "bandit33", group: "bandit33", mode: "0440",
+          content: NEXT_PW_32 + "\n",
+          // bandit32 はグループ bandit33 にも属する想定
+        },
+        "/bin/sh": {
+          type: "file", owner: "root", group: "root", mode: "0755",
+          content: "[ELF binary placeholder for /bin/sh]",
+          exec: (ctx) => {
+            ctx.shell.restricted = null;   // 制限解除
+            return { stdout: "$ ", stderr: "", exitCode: 0 };
+          }
+        }
+      },
+      groups: ["bandit32", "bandit33"]   // /etc/bandit_pass/bandit33 を読めるよう group メンバーシップ
+    };
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs, restricted: "uppercase", shellName: "/bin/sh" });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  await test("Lv32: ls などは大文字化されて command not found", async () => {
+    const sh = newLv32Shell();
+    const r = await sh.run("ls");
+    contains(r.output, "LS:", "大文字化されたコマンド名");
+    contains(r.output, "コマンドが見つかりません");
+  });
+
+  await test("Lv32: cat /etc/bandit_pass/bandit33 も同様に拒否", async () => {
+    const sh = newLv32Shell();
+    const r = await sh.run("cat /etc/bandit_pass/bandit33");
+    // CAT という大文字コマンドも存在しない
+    contains(r.output, "CAT:");
+  });
+
+  await test("Lv32: $0 を打つと /bin/sh が実行されて制限解除", async () => {
+    const sh = newLv32Shell();
+    const r = await sh.run("$0");
+    // /bin/sh exec の stdout は "$ "
+    contains(r.output, "$");
+    if (sh.restricted) throw new Error("脱出後も restricted が残っている");
+  });
+
+  await test("Lv32 通し: $0 → cat → 次のパスワード", async () => {
+    const sh = newLv32Shell();
+    await sh.run("$0");
+    const r = await sh.run("cat /etc/bandit_pass/bandit33");
+    contains(r.output, NEXT_PW_32);
+  });
+
+  await test("Lv32: $SHELL も同様に脱出可能 (env.SHELL = /bin/sh の場合)", async () => {
+    // $SHELL のデフォルトは /bin/bash。/bin/sh とは違うので、env を上書きしてテストする。
+    const spec = {
+      user: "bandit32", home: "/home/bandit32", cwd: "/home/bandit32",
+      files: {
+        "/bin/sh": {
+          type: "file", owner: "root", mode: "0755", content: "[/bin/sh]",
+          exec: (ctx) => { ctx.shell.restricted = null; return { stdout: "ok\n", stderr: "", exitCode: 0 }; }
+        }
+      }
+    };
+    const sh = new window.Shell({ vfs: new window.VFS(spec), restricted: "uppercase", shellName: "/bin/sh", env: { SHELL: "/bin/sh" } });
+    sh.registerMany(window.SHELL_COMMANDS);
+    const r = await sh.run("$SHELL");
+    contains(r.output, "ok");
+    if (sh.restricted) throw new Error("restricted が残っている");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_E_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

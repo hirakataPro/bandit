@@ -185,6 +185,26 @@
     await sh.continueInteractive(":q");
   });
 
+  await test("less: !less は入れ子不可 (拒否してから less に戻る)", async () => {
+    const sh = newShell();
+    await sh.run("less welcome.txt");
+    const r = await sh.continueInteractive("!less welcome.txt");
+    contains(r.output, "対話コマンド");
+    if (!sh._interactive || sh._interactive.name !== "less")
+      throw new Error("外側 less に戻っているべき");
+    await sh.continueInteractive("q");
+  });
+
+  await test("vim: :!vim は入れ子不可 (拒否してから vim に戻る)", async () => {
+    const sh = newShell();
+    await sh.run("vim welcome.txt");
+    const r = await sh.continueInteractive(":!vim welcome.txt");
+    contains(r.output, "対話コマンド");
+    if (!sh._interactive || sh._interactive.name !== "vim")
+      throw new Error("外側 vim に戻っているべき");
+    await sh.continueInteractive(":q");
+  });
+
   out("\n=== " + pass + " pass / " + fail + " fail ===");
   document.title = "WAVE_B_DONE_" + pass + "_" + fail;
 })();

@@ -168,3 +168,23 @@ input, textarea, select {
   overflow: hidden; clip: rect(0, 0, 0, 0);
   white-space: nowrap; border: 0;
 }
+
+/* スキップリンク: キーボード操作時にだけ可視化して main へ素早く遷移できるようにする */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: var(--s-3);
+  z-index: 1000;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--r-2);
+  font-weight: 500;
+  text-decoration: none;
+  transition: top var(--dur-fast) var(--ease);
+}
+.skip-link:focus {
+  top: var(--s-3);
+  outline: 2px solid var(--fg-0);
+  outline-offset: 2px;
+}

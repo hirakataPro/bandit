@@ -1,0 +1,404 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_G_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function eq(a, b, m) {
+    if (a !== b) throw new Error((m || "mismatch") +
+      "\n  expected: " + JSON.stringify(b).slice(0, 200) +
+      "\n  actual:   " + JSON.stringify(a).slice(0, 200));
+  }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  function notContains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) >= 0)
+      throw new Error((m || "should NOT contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave G integration test (git) ===");
+
+  // ============================================================
+  // ヘルパ: Lv27〜31 用のミニリポジトリ spec
+  // ============================================================
+  const NEXT_PW_27 = "git-clone-reveals-the-readme-27";
+  const NEXT_PW_28 = "git-log-shows-redacted-secret-28";
+  const NEXT_PW_29 = "dev-branch-holds-the-truth-29";
+  const NEXT_PW_30 = "hidden-tag-marks-the-spot-30";
+  const NEXT_PW_31 = "push-the-key-and-receive-the-prize-31";
+
+  function buildLv27Spec() {
+    return {
+      user: "bandit27", home: "/home/bandit27", cwd: "/home/bandit27",
+      gitRepos: {
+        "ssh://bandit27-git@localhost/home/bandit27-git/repo": {
+          defaultBranch: "master",
+          branches: { master: "c100" },
+          tags: {},
+          commits: {
+            c100: { parent: null, author: "ben <ben@shell>", date: "Mon May 23 09:00:00 2026",
+                    message: "initial commit",
+                    tree: { "README": "The password for the next level is:\n" + NEXT_PW_27 + "\n" } }
+          }
+        }
+      }
+    };
+  }
+
+  function buildLv28Spec() {
+    return {
+      user: "bandit28", home: "/home/bandit28", cwd: "/home/bandit28",
+      gitRepos: {
+        "ssh://bandit28-git@localhost/home/bandit28-git/repo": {
+          defaultBranch: "master",
+          branches: { master: "c2" },
+          tags: {},
+          commits: {
+            c1: { parent: null, author: "ben <ben@shell>", date: "Mon May 23 09:00:00 2026",
+                  message: "initial: add password",
+                  tree: { "README.md": "password: " + NEXT_PW_28 + "\n" } },
+            c2: { parent: "c1", author: "ben <ben@shell>", date: "Mon May 23 10:00:00 2026",
+                  message: "fix info leak",
+                  tree: { "README.md": "password: ***REDACTED***\n" } }
+          }
+        }
+      }
+    };
+  }
+
+  function buildLv29Spec() {
+    return {
+      user: "bandit29", home: "/home/bandit29", cwd: "/home/bandit29",
+      gitRepos: {
+        "ssh://bandit29-git@localhost/home/bandit29-git/repo": {
+          defaultBranch: "master",
+          branches: { master: "c10", dev: "c11" },
+          tags: {},
+          commits: {
+            c10: { parent: null, author: "ben", date: "M",
+                   message: "init",
+                   tree: { "README": "password: <no password yet>\n" } },
+            c11: { parent: "c10", author: "ben", date: "M",
+                   message: "wip on dev",
+                   tree: { "README": "password: " + NEXT_PW_29 + "\n" } }
+          }
+        }
+      }
+    };
+  }
+
+  function buildLv30Spec() {
+    return {
+      user: "bandit30", home: "/home/bandit30", cwd: "/home/bandit30",
+      gitRepos: {
+        "ssh://bandit30-git@localhost/home/bandit30-git/repo": {
+          defaultBranch: "master",
+          branches: { master: "c20" },
+          tags: { secret: "c21" },
+          commits: {
+            c20: { parent: null, author: "ben", date: "M",
+                   message: "init",
+                   tree: { "README": "just a readme, nothing here\n" } },
+            c21: { parent: "c20", author: "ben", date: "M",
+                   message: "tagged stash",
+                   tree: { "README": "just a readme, nothing here\n", "stash": NEXT_PW_30 + "\n" } }
+          }
+        }
+      }
+    };
+  }
+
+  function buildLv31Spec() {
+    return {
+      user: "bandit31", home: "/home/bandit31", cwd: "/home/bandit31",
+      gitRepos: {
+        "ssh://bandit31-git@localhost/home/bandit31-git/repo": {
+          defaultBranch: "master",
+          branches: { master: "c30" },
+          tags: {},
+          commits: {
+            c30: { parent: null, author: "ben", date: "M",
+                   message: "init",
+                   tree: { "README.md": "Push a file `key.txt` containing the text 'May I come in?' to master.\n" } }
+          },
+          // onPush: クライアント側 state を見て key.txt の内容を確認
+          onPush: async (state) => {
+            const head = state.branches[state.head] || state.head.replace(/^@/, "");
+            const tree = state.commits[head] && state.commits[head].tree;
+            if (tree && tree["key.txt"] && tree["key.txt"].trim() === "May I come in?") {
+              return "Well done! The password for the next level:\n" + NEXT_PW_31 + "\n";
+            }
+            return "rejected: key.txt was not correct.\n";
+          }
+        }
+      }
+    };
+  }
+
+  function newShell(spec) {
+    const vfs = new window.VFS(spec);
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  // ============================================================
+  // 単体テスト: 各サブコマンド
+  // ============================================================
+
+  await test("git: 引数なしで usage 表示", async () => {
+    const sh = newShell({ user: "x", home: "/home/x", cwd: "/home/x" });
+    const r = await sh.run("git");
+    contains(r.output, "usage:");
+    contains(r.output, "clone");
+  });
+
+  await test("git: 未知のサブコマンドはエラー", async () => {
+    const sh = newShell({ user: "x", home: "/home/x", cwd: "/home/x" });
+    const r = await sh.run("git frobnicate");
+    contains(r.output, "not a git command");
+  });
+
+  await test("git clone: 未登録 URL は fatal", async () => {
+    const sh = newShell({ user: "x", home: "/home/x", cwd: "/home/x" });
+    const r = await sh.run("git clone ssh://bogus@host/repo");
+    contains(r.output, "does not exist");
+  });
+
+  await test("git log: リポジトリ外で fatal", async () => {
+    const sh = newShell({ user: "x", home: "/home/x", cwd: "/home/x" });
+    const r = await sh.run("git log");
+    contains(r.output, "not a git repository");
+  });
+
+  // ============================================================
+  // Lv27 通し: clone → cat
+  // ============================================================
+
+  await test("Lv27: clone → cat README で次のパスワード", async () => {
+    const sh = newShell(buildLv27Spec());
+    let r = await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    contains(r.output, "Cloning into 'repo'");
+    contains(r.output, "Receiving objects");
+    r = await sh.run("ls");
+    contains(r.output, "repo");
+    r = await sh.run("cd repo; ls -a");
+    contains(r.output, ".git");
+    contains(r.output, "README");
+    r = await sh.run("cd repo; cat README");
+    contains(r.output, NEXT_PW_27);
+  });
+
+  await test("git clone: dir 引数を指定すると別名でクローン", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo myrepo");
+    const r = await sh.run("ls myrepo");
+    contains(r.output, "README");
+  });
+
+  await test("git clone: 既存ディレクトリには fatal", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    const r = await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    contains(r.output, "already exists");
+  });
+
+  // ============================================================
+  // Lv28 通し: log → show
+  // ============================================================
+
+  await test("Lv28: clone → cat README は redacted", async () => {
+    const sh = newShell(buildLv28Spec());
+    await sh.run("git clone ssh://bandit28-git@localhost/home/bandit28-git/repo");
+    const r = await sh.run("cd repo; cat README.md");
+    contains(r.output, "REDACTED");
+    notContains(r.output, NEXT_PW_28, "redacted README に生パスワードはない");
+  });
+
+  await test("Lv28: git log で 2 コミット見える", async () => {
+    const sh = newShell(buildLv28Spec());
+    await sh.run("git clone ssh://bandit28-git@localhost/home/bandit28-git/repo");
+    const r = await sh.run("cd repo; git log");
+    contains(r.output, "fix info leak");
+    contains(r.output, "initial: add password");
+  });
+
+  await test("Lv28: git show <hash> で redact 前のパスワード", async () => {
+    const sh = newShell(buildLv28Spec());
+    await sh.run("git clone ssh://bandit28-git@localhost/home/bandit28-git/repo");
+    const r = await sh.run("cd repo; git show c1");
+    contains(r.output, NEXT_PW_28);
+  });
+
+  await test("Lv28: git log --oneline で短表示", async () => {
+    const sh = newShell(buildLv28Spec());
+    await sh.run("git clone ssh://bandit28-git@localhost/home/bandit28-git/repo");
+    const r = await sh.run("cd repo; git log --oneline");
+    contains(r.output, "fix info leak");
+    contains(r.output, "initial: add password");
+    notContains(r.output, "Author:", "oneline では Author 行は出ない");
+  });
+
+  // ============================================================
+  // Lv29 通し: branch → checkout
+  // ============================================================
+
+  await test("Lv29: master では README にパスワードなし", async () => {
+    const sh = newShell(buildLv29Spec());
+    await sh.run("git clone ssh://bandit29-git@localhost/home/bandit29-git/repo");
+    const r = await sh.run("cd repo; cat README");
+    contains(r.output, "no password yet");
+    notContains(r.output, NEXT_PW_29);
+  });
+
+  await test("Lv29: git branch で master と dev が見える", async () => {
+    const sh = newShell(buildLv29Spec());
+    await sh.run("git clone ssh://bandit29-git@localhost/home/bandit29-git/repo");
+    const r = await sh.run("cd repo; git branch");
+    contains(r.output, "master");
+    contains(r.output, "dev");
+  });
+
+  await test("Lv29: git checkout dev → cat README でパスワード", async () => {
+    const sh = newShell(buildLv29Spec());
+    await sh.run("git clone ssh://bandit29-git@localhost/home/bandit29-git/repo");
+    let r = await sh.run("cd repo; git checkout dev");
+    contains(r.output, "Switched to branch 'dev'");
+    r = await sh.run("cd repo; cat README");
+    contains(r.output, NEXT_PW_29);
+  });
+
+  // ============================================================
+  // Lv30 通し: tag → show
+  // ============================================================
+
+  await test("Lv30: git tag で secret タグが見える", async () => {
+    const sh = newShell(buildLv30Spec());
+    await sh.run("git clone ssh://bandit30-git@localhost/home/bandit30-git/repo");
+    const r = await sh.run("cd repo; git tag");
+    contains(r.output, "secret");
+  });
+
+  await test("Lv30: git show secret でタグ先のパスワード", async () => {
+    const sh = newShell(buildLv30Spec());
+    await sh.run("git clone ssh://bandit30-git@localhost/home/bandit30-git/repo");
+    const r = await sh.run("cd repo; git show secret");
+    contains(r.output, NEXT_PW_30);
+  });
+
+  await test("Lv30: git checkout secret でファイルが取り出せる", async () => {
+    const sh = newShell(buildLv30Spec());
+    await sh.run("git clone ssh://bandit30-git@localhost/home/bandit30-git/repo");
+    await sh.run("cd repo; git checkout secret");
+    const r = await sh.run("cd repo; cat stash");
+    contains(r.output, NEXT_PW_30);
+  });
+
+  // ============================================================
+  // Lv31 通し: add → commit → push
+  // ============================================================
+
+  await test("Lv31: add → commit → push で onPush が次のパスワードを返す", async () => {
+    const sh = newShell(buildLv31Spec());
+    await sh.run("git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    await sh.run("cd repo; echo 'May I come in?' > key.txt");
+    let r = await sh.run("cd repo; git status");
+    contains(r.output, "key.txt");
+    contains(r.output, "Untracked");
+    await sh.run("cd repo; git add key.txt");
+    r = await sh.run("cd repo; git status");
+    contains(r.output, "new file:   key.txt");
+    await sh.run("cd repo; git commit -m 'add key'");
+    r = await sh.run("cd repo; git log --oneline");
+    contains(r.output, "add key");
+    r = await sh.run("cd repo; git push");
+    contains(r.output, NEXT_PW_31);
+  });
+
+  await test("Lv31: 違う内容を push しても拒否される", async () => {
+    const sh = newShell(buildLv31Spec());
+    await sh.run("git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    await sh.run("cd repo; echo 'wrong content' > key.txt");
+    await sh.run("cd repo; git add key.txt");
+    await sh.run("cd repo; git commit -m 'add wrong key'");
+    const r = await sh.run("cd repo; git push");
+    contains(r.output, "rejected");
+    notContains(r.output, NEXT_PW_31);
+  });
+
+  // ============================================================
+  // その他の挙動テスト
+  // ============================================================
+
+  await test("git status: クローン直後は clean", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    const r = await sh.run("cd repo; git status");
+    contains(r.output, "On branch master");
+    contains(r.output, "nothing to commit");
+  });
+
+  await test("git commit: -m なしはエラー", async () => {
+    const sh = newShell(buildLv31Spec());
+    await sh.run("git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    await sh.run("cd repo; echo x > a.txt");
+    await sh.run("cd repo; git add a.txt");
+    const r = await sh.run("cd repo; git commit");
+    contains(r.output, "-m");
+  });
+
+  await test("git commit: ステージなしはエラー", async () => {
+    const sh = newShell(buildLv31Spec());
+    await sh.run("git clone ssh://bandit31-git@localhost/home/bandit31-git/repo");
+    const r = await sh.run("cd repo; git commit -m 'empty'");
+    contains(r.output, "nothing to commit");
+  });
+
+  await test("git checkout: 不明な ref はエラー", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    const r = await sh.run("cd repo; git checkout no-such-branch");
+    contains(r.output, "did not match");
+  });
+
+  await test("git branch <name>: 新規ブランチを HEAD と同じコミットに作成", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    await sh.run("cd repo; git branch feature/x");
+    const r = await sh.run("cd repo; git branch");
+    contains(r.output, "feature/x");
+    contains(r.output, "* ");
+  });
+
+  await test("git show: 不明 ref はエラー", async () => {
+    const sh = newShell(buildLv27Spec());
+    await sh.run("git clone ssh://bandit27-git@localhost/home/bandit27-git/repo");
+    const r = await sh.run("cd repo; git show no-such-thing");
+    contains(r.output, "unknown revision");
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_G_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

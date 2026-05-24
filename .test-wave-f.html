@@ -1,0 +1,218 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WAVE_F_PENDING</title></head>
+<body>
+<pre id="log"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+
+<script>
+(async function() {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function eq(a, b, m) {
+    if (a !== b) throw new Error((m || "mismatch") +
+      "\n  expected: " + JSON.stringify(b).slice(0, 200) +
+      "\n  actual:   " + JSON.stringify(a).slice(0, 200));
+  }
+  function contains(haystack, needle, m) {
+    if (String(haystack).indexOf(needle) < 0)
+      throw new Error((m || "should contain") +
+        "\n  needle:   " + JSON.stringify(needle) +
+        "\n  haystack: " + JSON.stringify(String(haystack).slice(0, 500)));
+  }
+  async function test(name, fn) {
+    try { await fn(); out("  OK   " + name); pass++; }
+    catch (e) { out("  FAIL " + name + ": " + e.message); fail++; }
+  }
+
+  out("=== Wave F integration test (cron / md5sum / sha256sum) ===");
+
+  function basicShell(spec) {
+    const vfs = new window.VFS(spec || { user: "alice", home: "/home/alice", cwd: "/home/alice" });
+    const sh = new window.Shell({ vfs });
+    sh.registerMany(window.SHELL_COMMANDS);
+    return sh;
+  }
+
+  // ---------- md5sum 既知ベクトル ----------
+
+  await test("md5sum: 空文字 → d41d8cd98f00b204e9800998ecf8427e", async () => {
+    const sh = basicShell();
+    const r = await sh.run("echo -n '' | md5sum");
+    contains(r.output, "d41d8cd98f00b204e9800998ecf8427e");
+  });
+
+  await test("md5sum: 'a' → 0cc175b9c0f1b6a831c399e269772661", async () => {
+    const sh = basicShell();
+    const r = await sh.run("echo -n a | md5sum");
+    contains(r.output, "0cc175b9c0f1b6a831c399e269772661");
+  });
+
+  await test("md5sum: 'abc' → 900150983cd24fb0d6963f7d28e17f72", async () => {
+    const sh = basicShell();
+    const r = await sh.run("echo -n abc | md5sum");
+    contains(r.output, "900150983cd24fb0d6963f7d28e17f72");
+  });
+
+  await test("md5sum: 'message digest' → f96b697d7cb7938d525a2f31aaf161d0", async () => {
+    const sh = basicShell();
+    const r = await sh.run("echo -n 'message digest' | md5sum");
+    contains(r.output, "f96b697d7cb7938d525a2f31aaf161d0");
+  });
+
+  await test("md5sum: 改行を含む文字列 ('I am user bandit23\\n')", async () => {
+    // bandit22 のセオリー: echo 'I am user X' | md5sum (改行つき)
+    // 期待値: 8ca319486bfbbc3663ea0fbe81326349 (実機での出力)
+    // 注意: 実機 echo は末尾改行を付ける。それを含めたハッシュ。
+    const sh = basicShell();
+    const r = await sh.run("echo 'I am user bandit23' | md5sum");
+    contains(r.output, "8ca319486bfbbc3663ea0fbe81326349");
+  });
+
+  await test("md5sum: ファイルから", async () => {
+    const sh = basicShell({
+      user: "alice", home: "/home/alice", cwd: "/home/alice",
+      files: { "/home/alice/data.txt": { type: "file", owner: "alice", mode: "0644", content: "abc" } }
+    });
+    const r = await sh.run("md5sum data.txt");
+    contains(r.output, "900150983cd24fb0d6963f7d28e17f72");
+    contains(r.output, "data.txt");
+  });
+
+  // ---------- sha256sum 既知ベクトル ----------
+
+  await test("sha256sum: 'abc' → ba7816bf...", async () => {
+    const sh = basicShell();
+    const r = await sh.run("echo -n abc | sha256sum");
+    contains(r.output, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+
+  // ---------- crontab ----------
+
+  await test("crontab -l: 未登録なら 'no crontab for ...'", async () => {
+    const sh = basicShell();
+    const r = await sh.run("crontab -l");
+    contains(r.output, "no crontab for");
+  });
+
+  await test("crontab -l: spec.crontabs から読む", async () => {
+    const sh = basicShell({
+      user: "bandit21", home: "/home/bandit21", cwd: "/home/bandit21",
+      crontabs: {
+        bandit21: "* * * * * /usr/bin/cronjob_bandit21.sh\n"
+      }
+    });
+    const r = await sh.run("crontab -l");
+    contains(r.output, "/usr/bin/cronjob_bandit21.sh");
+  });
+
+  await test("crontab -u other -l: 別ユーザーの crontab を読む", async () => {
+    const sh = basicShell({
+      user: "alice", home: "/home/alice",
+      crontabs: { bob: "@hourly /usr/bin/job-bob.sh\n" }
+    });
+    const r = await sh.run("crontab -u bob -l");
+    contains(r.output, "job-bob.sh");
+  });
+
+  await test("crontab <file>: ファイルから登録", async () => {
+    const sh = basicShell({
+      user: "alice", home: "/home/alice", cwd: "/home/alice",
+      files: { "/home/alice/myjobs": { type: "file", owner: "alice", mode: "0644",
+        content: "0 0 * * * /usr/bin/midnight.sh\n" } }
+    });
+    await sh.run("crontab myjobs");
+    const r = await sh.run("crontab -l");
+    contains(r.output, "/usr/bin/midnight.sh");
+  });
+
+  // ---------- Lv21 想定: cron.d を辿る ----------
+
+  await test("Lv21 想定: cron.d → スクリプト → 出力ファイル を辿れる", async () => {
+    const NEXT_PW = "cron-trail-leads-to-password-21";
+    const cronD = "@reboot bandit22 /usr/bin/cronjob_bandit22.sh\n* * * * * bandit22 /usr/bin/cronjob_bandit22.sh\n";
+    const cronScript = "#!/bin/bash\nchmod 644 /tmp/bandit22-out\ncat /etc/bandit_pass/bandit22 > /tmp/bandit22-out\n";
+    const sh = basicShell({
+      user: "bandit21", home: "/home/bandit21", cwd: "/home/bandit21",
+      files: {
+        "/etc/cron.d/cronjob_bandit22": { type: "file", owner: "root", group: "root", mode: "0644", content: cronD },
+        "/usr/bin/cronjob_bandit22.sh": { type: "file", owner: "root", group: "root", mode: "0755", content: cronScript },
+        "/tmp/bandit22-out": { type: "file", owner: "bandit22", group: "bandit22", mode: "0644", content: NEXT_PW + "\n" }
+      }
+    });
+    let r = await sh.run("cat /etc/cron.d/cronjob_bandit22");
+    contains(r.output, "/usr/bin/cronjob_bandit22.sh");
+    r = await sh.run("cat /usr/bin/cronjob_bandit22.sh");
+    contains(r.output, "/tmp/bandit22-out");
+    r = await sh.run("cat /tmp/bandit22-out");
+    contains(r.output, NEXT_PW);
+  });
+
+  // ---------- Lv22 想定: md5 を使って動的ファイル名を計算 ----------
+
+  await test("Lv22 想定: スクリプト読解 → md5sum で動的ファイル名 → cat", async () => {
+    // スクリプト相当: hash = md5("I am user bandit23\n") の最初の8文字をファイル名に
+    const sh = basicShell({
+      user: "bandit22", home: "/home/bandit22", cwd: "/home/bandit22",
+      files: {
+        "/usr/bin/cronjob_bandit23.sh": { type: "file", owner: "root", mode: "0755",
+          content: "#!/bin/bash\nmyname=$(whoami)\nmytarget=$(echo I am user $myname | md5sum | cut -d ' ' -f 1)\ncat /etc/bandit_pass/$myname > /tmp/$mytarget\n" }
+      }
+    });
+    let r = await sh.run("cat /usr/bin/cronjob_bandit23.sh");
+    contains(r.output, "md5sum");
+    // ユーザーが手で計算する想定: echo 'I am user bandit23' | md5sum
+    r = await sh.run("echo 'I am user bandit23' | md5sum");
+    contains(r.output, "8ca319486bfbbc3663ea0fbe81326349");
+  });
+
+  // ---------- Lv23 想定: setuid な cron-tick (Wave E のメカニズム再利用) ----------
+
+  await test("Lv23 想定: setuid cron-tick が /var/spool 内スクリプトを実行", async () => {
+    const NEXT_PW = "write-script-and-cron-runs-it-23";
+    const sh = basicShell({
+      user: "bandit23", home: "/home/bandit23", cwd: "/home/bandit23",
+      files: {
+        "/etc/bandit_pass/bandit24": { type: "file", owner: "bandit24", group: "bandit24", mode: "0400", content: NEXT_PW + "\n" },
+        "/var/spool/cron/bandit24": { type: "dir", owner: "bandit24", group: "bandit24", mode: "0733" },  // bandit23 が書き込める
+        "/usr/local/bin/cron-tick": {
+          type: "file", owner: "bandit24", group: "bandit24", mode: "4755",
+          content: "[cron tick binary]",
+          exec: async (ctx) => {
+            const r = ctx.vfs.list("/var/spool/cron/bandit24");
+            if (r.error) return { stdout: "", stderr: "cron-tick: " + r.error + "\n", exitCode: 1 };
+            let totalOut = "";
+            for (const e of r.entries) {
+              if (e.node.type !== "file") continue;
+              const sR = ctx.vfs.readFile("/var/spool/cron/bandit24/" + e.name);
+              if (sR.error) continue;
+              const runRes = await ctx.shell.run(sR.content);
+              totalOut += runRes.output || "";
+            }
+            return { stdout: totalOut, stderr: "", exitCode: 0 };
+          }
+        }
+      }
+    });
+    // bandit23 は password を直接読めない
+    let r = await sh.run("cat /etc/bandit_pass/bandit24");
+    contains(r.output, "権限がありません");
+    // 自分のスクリプトを書く: cat password > /tmp/bandit23-out
+    await sh.run("echo 'cat /etc/bandit_pass/bandit24 > /tmp/bandit23-out' > /var/spool/cron/bandit24/myscript.sh");
+    // setuid cron-tick を起動
+    await sh.run("/usr/local/bin/cron-tick");
+    // 出力を読む
+    r = await sh.run("cat /tmp/bandit23-out");
+    contains(r.output, NEXT_PW);
+  });
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "WAVE_F_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body></html>

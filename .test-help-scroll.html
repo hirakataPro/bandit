@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>SCROLL_TEST_PENDING</title>
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/pages.css">
+<link rel="stylesheet" href="assets/css/terminal.css">
+</head>
+<body>
+
+<!-- ページに高さを持たせる (実レベルページと似た構造でスクロール余地を作る) -->
+<header style="height:80px; background:#222;"></header>
+<main style="padding: 20px;">
+  <section style="height:400px; background:#111; margin-bottom:20px;">
+    <h3 style="color:#fff; padding:20px;">シナリオ枠 (ダミー)</h3>
+  </section>
+  <section>
+    <div id="termHost"></div>
+  </section>
+  <section style="height:600px; background:#111; margin-top:20px;">
+    <h3 style="color:#fff; padding:20px;">ヒント枠 (ダミー)</h3>
+  </section>
+</main>
+
+<pre id="result" style="color:#fff; background:#000; padding:20px; font-family:monospace;"></pre>
+
+<script src="assets/js/terminal/vfs.js"></script>
+<script src="assets/js/terminal/parser.js"></script>
+<script src="assets/js/terminal/shell.js"></script>
+<script src="assets/js/terminal/commands.js"></script>
+<script src="assets/js/terminal/ui.js"></script>
+
+<script>
+(async function () {
+  const result = document.getElementById("result");
+  const log = [];
+
+  const vfs = new VFS({ user: "tester", home: "/home/tester", cwd: "/home/tester" });
+  const shell = new Shell({ vfs });
+  shell.registerMany(window.SHELL_COMMANDS);
+  const term = new Terminal("#termHost", shell, { title: "test" });
+
+  // ターミナルにスクロール (ページ中央付近) する
+  document.getElementById("termHost").scrollIntoView({ block: "center", behavior: "instant" });
+  await new Promise(r => setTimeout(r, 100));
+
+  const bodyEl = document.querySelector(".term__body");
+  const termEl = document.querySelector(".term");
+
+  function snap(label) {
+    return {
+      label,
+      pageScrollY: Math.round(window.scrollY),
+      termBodyClientHeight: bodyEl.clientHeight,
+      termBodyScrollHeight: bodyEl.scrollHeight,
+      termBodyScrollTop: bodyEl.scrollTop,
+      termClientHeight: termEl.clientHeight,
+      docScrollHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight
+    };
+  }
+
+  const before = snap("before help");
+  log.push(JSON.stringify(before, null, 2));
+
+  // help コマンドを入力フィールドに入れて Enter 相当を発火
+  term.inputEl.focus({ preventScroll: true });
+
+  const stages = [];
+  const origEcho = term._echoCommand.bind(term);
+  const origPrint = term.print.bind(term);
+  const origRender = term._renderPrompt.bind(term);
+  term._echoCommand = function (l) { stages.push({ stage: "before echo", y: window.scrollY }); origEcho(l); stages.push({ stage: "after echo", y: window.scrollY }); };
+  term.print = function (t) { stages.push({ stage: "before print", y: window.scrollY }); origPrint(t); stages.push({ stage: "after print", y: window.scrollY }); };
+  term._renderPrompt = function () { stages.push({ stage: "before renderPrompt", y: window.scrollY }); origRender(); stages.push({ stage: "after renderPrompt (sync)", y: window.scrollY }); };
+
+  await term._submit("help");
+  stages.push({ stage: "after _submit await", y: window.scrollY });
+  await new Promise(r => setTimeout(r, 50));
+  stages.push({ stage: "after 50ms", y: window.scrollY });
+  await new Promise(r => setTimeout(r, 200));
+  stages.push({ stage: "after 250ms total", y: window.scrollY });
+
+  const after = snap("after help");
+  log.push("");
+  log.push(JSON.stringify(after, null, 2));
+  log.push("");
+  log.push("stages:");
+  for (const s of stages) log.push("  " + s.stage + ": scrollY=" + s.y);
+
+  // 判定:
+  // 1) termClientHeight が固定 (≈ 480px 程度)
+  // 2) termBodyScrollHeight > termBodyClientHeight (内部スクロール発生)
+  // 3) pageScrollY が "大きく変わっていない" (許容: ±50px)
+  const verdict = {
+    termHeightStable: Math.abs(after.termClientHeight - before.termClientHeight) < 10,
+    bodyOverflowsInternally: after.termBodyScrollHeight > after.termBodyClientHeight + 10,
+    pageDidNotScrollFar: Math.abs(after.pageScrollY - before.pageScrollY) < 80,
+    bodyScrolledToBottom: Math.abs((after.termBodyScrollTop + after.termBodyClientHeight) - after.termBodyScrollHeight) < 30
+  };
+  log.push("");
+  log.push("verdict: " + JSON.stringify(verdict, null, 2));
+
+  const allPass = Object.values(verdict).every(v => v === true);
+  document.title = allPass ? "SCROLL_OK" : "SCROLL_FAIL";
+  result.textContent = log.join("\n");
+})();
+</script>
+</body>
+</html>

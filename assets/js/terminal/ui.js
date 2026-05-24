@@ -82,6 +82,13 @@
 
   Terminal.prototype._build = function () {
     this.host.classList.add("term");
+    // term__output の aria-live は off。長い ls / help 出力を逐次読み上げる
+    // と SR ユーザーが詰まるため。代わりに __status (role=status) に
+    // 「コマンド完了 / 出力 N 行」など簡潔な要約だけ流す。
+    // __input は contenteditable のため role/aria-multiline を明示し、
+    // __input-help に操作ヘルプを置いて aria-describedby で結びつける。
+    const helpId = "term-help-" + Math.random().toString(36).slice(2, 8);
+    const statusId = "term-status-" + Math.random().toString(36).slice(2, 8);
     this.host.innerHTML = `
       <div class="term__chrome">
         <div class="term__lights" aria-hidden="true">
@@ -93,18 +100,29 @@
         <div class="term__chrome-spacer"></div>
       </div>
       <div class="term__body" tabindex="0">
-        <div class="term__output" aria-live="polite"></div>
+        <div class="term__output" aria-live="off"></div>
         <div class="term__line">
-          <span class="term__prompt"></span><span class="term__input" contenteditable="true" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-label="ターミナル入力"></span><span class="term__caret" aria-hidden="true"></span>
+          <span class="term__prompt" aria-hidden="true"></span><span class="term__input" contenteditable="true" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" role="textbox" aria-multiline="false" aria-label="ターミナル入力" aria-describedby="${helpId}"></span><span class="term__caret" aria-hidden="true"></span>
         </div>
       </div>
+      <span id="${helpId}" class="sr-only">Tab で補完、上下キーで履歴、Ctrl+L で画面クリア、Ctrl+C で入力中断、Ctrl+D で終了。help と打つとコマンド一覧が表示されます。</span>
+      <div id="${statusId}" class="sr-only" role="status" aria-live="polite"></div>
     `;
     this.titleEl   = this.host.querySelector(".term__title");
     this.bodyEl    = this.host.querySelector(".term__body");
     this.outputEl  = this.host.querySelector(".term__output");
     this.promptEl  = this.host.querySelector(".term__prompt");
     this.inputEl   = this.host.querySelector(".term__input");
+    this.statusEl  = this.host.querySelector("#" + statusId);
     if (this.opts.title) this.titleEl.textContent = this.opts.title;
+  };
+
+  // SR 向けに 1 行の状況要約を流す (短く、煩くないように)
+  Terminal.prototype._announce = function (text) {
+    if (!this.statusEl) return;
+    // 同じ内容を連続で流すと SR によっては読み上げない。タイムスタンプではなくスペースで強制更新。
+    this.statusEl.textContent = "";
+    setTimeout(() => { this.statusEl.textContent = String(text || ""); }, 30);
   };
 
   Terminal.prototype._wire = function () {
@@ -176,7 +194,10 @@
 
     this.inputEl.addEventListener("focus", () => {
       self.host.classList.add("is-focused");
+      // bodyEl の内部スクロールでページが動かないよう保護
+      const px = window.scrollX, py = window.scrollY;
       self.bodyEl.scrollTop = self.bodyEl.scrollHeight;
+      if (window.scrollX !== px || window.scrollY !== py) window.scrollTo(px, py);
     });
     this.inputEl.addEventListener("blur", () => {
       self.host.classList.remove("is-focused");
@@ -219,11 +240,30 @@
     return this.shell.prompt();
   };
 
+  // ページ全体の scroll 位置を維持しつつ、関数本体を実行する。
+  // contenteditable な inputEl の caret 再配置や bodyEl 内スクロールが
+  // ブラウザの auto-scrollIntoView を誘発してページが下にずれることがあるため、
+  // 出力・プロンプト再描画の前後でページスクロールを固定する。
+  function preservePageScroll(fn) {
+    const x = window.scrollX, y = window.scrollY;
+    try { fn(); } finally {
+      // 同期内で起きた page scroll は即時に戻す
+      if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+      // 非同期 (focus の setTimeout 等) で起きるケースも raf 1 回分まで補正
+      requestAnimationFrame(() => {
+        if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+      });
+    }
+  }
+
   Terminal.prototype._renderPrompt = function () {
-    this.promptEl.innerHTML = this._renderPromptHTML();
-    this.inputEl.textContent = "";
-    this.bodyEl.scrollTop = this.bodyEl.scrollHeight;
-    setTimeout(() => this.inputEl.focus({ preventScroll: true }), 0);
+    const self = this;
+    preservePageScroll(() => {
+      self.promptEl.innerHTML = self._renderPromptHTML();
+      self.inputEl.textContent = "";
+      self.bodyEl.scrollTop = self.bodyEl.scrollHeight;
+      setTimeout(() => self.inputEl.focus({ preventScroll: true }), 0);
+    });
   };
 
   // 出力 (ANSI 解釈つき)
@@ -240,8 +280,11 @@
     const html = ansiToHtml(s);
     const span = document.createElement("span");
     span.innerHTML = html;
-    this.outputEl.appendChild(span);
-    this.bodyEl.scrollTop = this.bodyEl.scrollHeight;
+    const self = this;
+    preservePageScroll(() => {
+      self.outputEl.appendChild(span);
+      self.bodyEl.scrollTop = self.bodyEl.scrollHeight;
+    });
   };
 
   // エコー (色付きプロンプト + 入力をそのまま) — HTML 出力
@@ -250,8 +293,11 @@
     wrap.className = "term__echo";
     wrap.innerHTML = this._renderPromptHTML() +
       '<span class="term__echo-input">' + escapeHtml(line) + "</span>";
-    this.outputEl.appendChild(wrap);
-    this.bodyEl.scrollTop = this.bodyEl.scrollHeight;
+    const self = this;
+    preservePageScroll(() => {
+      self.outputEl.appendChild(wrap);
+      self.bodyEl.scrollTop = self.bodyEl.scrollHeight;
+    });
   };
 
   Terminal.prototype.clear = function () {
@@ -264,6 +310,11 @@
 
   Terminal.prototype._submit = async function (line) {
     const trimmed = String(line || "");
+    // 出力中はフォーカスを外す。contenteditable inputEl がフォーカスされたまま
+    // bodyEl 内部スクロールや outputEl 追記が起きると、ブラウザが
+    // 「フォーカス要素を視野に保つ」ためにページ全体をスクロールしてしまうため。
+    // preventScroll は focus() 呼び出し時のみ有効で既存フォーカスには効かない。
+    this.inputEl.blur();
     this._echoCommand(trimmed);
     this.inputEl.textContent = "";
     this.histIndex = -1;
@@ -314,12 +365,22 @@
 
     if (window.Progress) Progress.pushHistory(trimmed);
 
+    // SR 通知: コマンドの結果を 1 行で要約 (exit code とおおよその出力行数)
+    const outLines = (result && result.output) ? (result.output.split("\n").length - 1) : 0;
+    const ec = (result && typeof result.exitCode === "number") ? result.exitCode : 0;
+    this._announce(
+      "コマンド完了。" +
+      (ec === 0 ? "正常終了" : "終了コード " + ec) +
+      (outLines > 0 ? "、出力 " + outLines + " 行" : "")
+    );
+
     if (this.shell._exitRequested) {
       this.print("logout\n");
       this.busy = false;
       this.host.classList.remove("is-busy");
       this.inputEl.contentEditable = "false";
       this.host.classList.add("is-closed");
+      this._announce("セッションを終了しました。");
       return;
     }
 

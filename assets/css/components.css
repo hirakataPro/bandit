@@ -52,6 +52,11 @@
   color: var(--fg-1);
   font-size: var(--t-small);
   font-weight: 500;
+  /* タップターゲットを 44px 以上確保 (WCAG 2.5.5) */
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 6px;
   transition: color var(--dur-fast) var(--ease);
 }
 .nav__link:hover, .nav__link[aria-current="page"] {
@@ -60,7 +65,11 @@
 
 @media (max-width: 640px) {
   .nav__links { gap: var(--s-3); }
-  .nav__link { font-size: 13px; }
+  .nav__link { font-size: 13px; padding: 0 4px; }
+}
+@media (max-width: 480px) {
+  .nav__links { gap: 6px; }
+  .nav__link { font-size: 12px; padding: 0 3px; }
 }
 
 /* ---------- Footer ---------- */
@@ -562,4 +571,46 @@
   gap: var(--s-3);
   justify-content: center;
   flex-wrap: wrap;
+}
+
+/* ---------- a11y: Focus indicators (P6-2) ---------- */
+/* box-shadow と outline を二重化することで Windows Forced Colors でも視認可能。 */
+
+.nav__link:focus-visible,
+.disclosure summary:focus-visible,
+.chip:focus-visible,
+.level-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--shadow-glow);
+  border-radius: var(--r-1);
+}
+
+.disclosure summary:focus-visible {
+  background: var(--bg-3);
+}
+
+/* Nav 現在ページの視覚化を強化 (色 + 下線) */
+.nav__link[aria-current="page"] {
+  position: relative;
+}
+.nav__link[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -6px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+/* level-card クリア済みの色覚多様性対応: 緑だけでなく左の色帯と二重円で識別 */
+.level-card[data-cleared="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--accent-success);
+}
+.level-card[data-cleared="true"] .level-card__badge {
+  box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 3px var(--accent-success);
 }

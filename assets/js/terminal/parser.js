@@ -184,6 +184,14 @@
       return { value: v, next: j };
     }
 
+    // $0 〜 $9 (位置パラメータ)。$0 はシェル名を返す。
+    if (/[0-9]/.test(input[j])) {
+      const name = input[j];
+      j++;
+      const v = (getVar && getVar(name)) || "";
+      return { value: v, next: j };
+    }
+
     if (/[A-Za-z_]/.test(input[j])) {
       const start = j;
       while (j < input.length && /[A-Za-z0-9_]/.test(input[j])) j++;

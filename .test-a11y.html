@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>A11Y_PENDING</title>
+</head>
+<body>
+<pre id="log"></pre>
+
+<script>
+(async function () {
+  const log = document.getElementById("log");
+  let pass = 0, fail = 0;
+  const lines = [];
+  function out(s) { lines.push(s); log.textContent = lines.join("\n"); }
+  function ok(name) { out("  OK   " + name); pass++; }
+  function f(name, msg) { out("  FAIL " + name + ": " + msg); fail++; }
+  async function fetchDoc(url) {
+    const res = await fetch(url, { cache: "no-store" });
+    const html = await res.text();
+    const parser = new DOMParser();
+    return parser.parseFromString(html, "text/html");
+  }
+
+  out("=== Phase 6 a11y 構造検査 ===");
+
+  for (const page of ["index.html", "level.html", "cheatsheet.html", "settings.html", "about.html"]) {
+    try {
+      const doc = await fetchDoc(page);
+      const skip = doc.querySelector("a.skip-link");
+      if (!skip) { f(page + " skip-link", "見つかりません"); continue; }
+      if (skip.getAttribute("href") !== "#main") { f(page + " skip-link", "href=#main でない"); continue; }
+      const main = doc.querySelector("main#main");
+      if (!main) { f(page + " main#main", "id=main の main が見つかりません"); continue; }
+      ok(page + ": skip-link + main#main");
+    } catch (e) {
+      f(page, e.message);
+    }
+  }
+
+  // index.html: progressbar role + aria-* 属性
+  try {
+    const doc = await fetchDoc("index.html");
+    const bar = doc.querySelector("#progressBar");
+    if (!bar) throw new Error("#progressBar 見つからず");
+    if (bar.getAttribute("role") !== "progressbar") throw new Error("role=progressbar でない");
+    for (const a of ["aria-valuemin", "aria-valuemax", "aria-valuenow", "aria-valuetext"]) {
+      if (!bar.hasAttribute(a)) throw new Error(a + " が無い");
+    }
+    ok("index.html: progressbar に必須 ARIA");
+  } catch (e) { f("index.html progressbar", e.message); }
+
+  // settings.html: 同じく progressbar
+  try {
+    const doc = await fetchDoc("settings.html");
+    const bar = doc.querySelector("#sBar");
+    if (!bar) throw new Error("#sBar 見つからず");
+    if (bar.getAttribute("role") !== "progressbar") throw new Error("role=progressbar でない");
+    ok("settings.html: progressbar に role");
+  } catch (e) { f("settings.html progressbar", e.message); }
+
+  // level.html: 動的生成された Terminal 要素を確認するため iframe で読み込み、構造を見る
+  try {
+    await new Promise((resolve, reject) => {
+      const ifr = document.createElement("iframe");
+      ifr.src = "level.html?l=0";
+      ifr.style.width = "1024px";
+      ifr.style.height = "768px";
+      ifr.style.position = "absolute";
+      ifr.style.left = "-9999px";
+      ifr.onload = () => {
+        setTimeout(() => {
+          try {
+            const idoc = ifr.contentDocument;
+            const input = idoc.querySelector(".term__input");
+            if (!input) throw new Error(".term__input なし");
+            if (input.getAttribute("role") !== "textbox") throw new Error("role=textbox でない");
+            if (input.getAttribute("aria-multiline") !== "false") throw new Error("aria-multiline=false でない");
+            if (!input.hasAttribute("aria-describedby")) throw new Error("aria-describedby なし");
+            const descId = input.getAttribute("aria-describedby");
+            const desc = idoc.getElementById(descId);
+            if (!desc) throw new Error("aria-describedby の参照先 (" + descId + ") なし");
+            if (!desc.classList.contains("sr-only")) throw new Error("ヘルプ要素が sr-only でない");
+            const status = idoc.querySelector("[role='status']");
+            if (!status) throw new Error("role=status な要素なし");
+            const output = idoc.querySelector(".term__output");
+            if (output.getAttribute("aria-live") === "polite") throw new Error("term__output に aria-live=polite が残っている (要 off)");
+            ok("level.html: term input role/desc + status live region");
+            resolve();
+          } catch (e) {
+            f("level.html term a11y", e.message);
+            resolve();
+          }
+        }, 500);
+      };
+      ifr.onerror = () => { f("level.html iframe load", "失敗"); resolve(); };
+      document.body.appendChild(ifr);
+    });
+  } catch (e) { f("level.html iframe", e.message); }
+
+  out("\n=== " + pass + " pass / " + fail + " fail ===");
+  document.title = "A11Y_DONE_" + pass + "_" + fail;
+})();
+</script>
+</body>
+</html>

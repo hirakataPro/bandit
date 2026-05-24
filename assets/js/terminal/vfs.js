@@ -36,8 +36,11 @@
     return { type: "dir", name, owner, group, mode, mtime, children: Object.create(null) };
   }
 
-  function makeFile({ name = "", owner = "root", group = "root", mode = 0o644, mtime = now(), content = "" } = {}) {
-    return { type: "file", name, owner, group, mode, mtime, content };
+  function makeFile({ name = "", owner = "root", group = "root", mode = 0o644, mtime = now(), content = "", exec = null } = {}) {
+    // exec: 関数 (ctx, args, asUser) → {stdout, stderr, exitCode}。指定があれば仮想バイナリとして
+    //       直接実行できる (./foo / /usr/local/bin/foo 等の絶対・相対パスから呼ばれる)。
+    //       mode に setuid (0o4000) ビットがあればファイル所有者として実行される。
+    return { type: "file", name, owner, group, mode, mtime, content, exec };
   }
 
   function makeSymlink({ name = "", owner = "root", group = "root", mode = 0o777, mtime = now(), target } = {}) {
@@ -59,6 +62,15 @@
     // SSH 認証情報: "user@host" → { authorizedKey, onAuth(ctx)→string }
     // ssh -i がこのキーを参照する。Lv13 等で使う。
     this.sshKeys = Object.assign({}, (spec && spec.sshKeys) || {});
+
+    // crontab: user → cron エントリのテキスト (1行1ジョブ)。Lv21-23 で使う。
+    this.crontabs = Object.assign({}, (spec && spec.crontabs) || {});
+
+    // git: リモートリポジトリ ("ssh://..." → {head, branches, tags, commits, onPush})
+    // Lv27-31 で使う。
+    this.gitRepos = Object.assign({}, (spec && spec.gitRepos) || {});
+    // クローン済みのローカルリポジトリ状態 (Map<repoRootPath, state>)
+    this._gitStates = new Map();
 
     this.root = makeDir({ name: "", mode: 0o755 });
 
