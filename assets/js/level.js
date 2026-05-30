@@ -17,6 +17,44 @@
 
   function $(id) { return document.getElementById(id); }
 
+  // AI に聞くための段階プロンプトを生成する。
+  // 方針: 答え (コマンド行・パスワード) を直接出させない「誘導型」。
+  // 課題サマリは window.LEVEL_AI_TASKS[n] を使い、無ければ story 先頭文へフォールバック。
+  function buildAiPrompts(n, data) {
+    const tasks = window.LEVEL_AI_TASKS || [];
+    let task = tasks[n];
+    if (!task) {
+      const story = String((data && data.story) || "").trim();
+      task = story.split(/[\n。]/).map(s => s.trim()).filter(Boolean)[0]
+        || "Linux のコマンドラインの練習問題に取り組んでいます。";
+      if (!/[。.!?！？]$/.test(task)) task += "。";
+    }
+    const intro =
+      "あなたは Linux 初心者に教える、親切で丁寧な家庭教師です。" +
+      "私はターミナル（コマンドライン）の練習問題に取り組んでいます。";
+    const taskBlock = "\n\n【取り組んでいる課題】\n" + task;
+    return [
+      {
+        label: "まずヒントが欲しいとき",
+        text: intro + "\n\n" +
+          "いきなり答えやコマンド全体は教えないでください。代わりに、最初に何へ注目すればよいか、" +
+          "考えるきっかけになるヒントを1つだけ短く教えてください。" + taskBlock
+      },
+      {
+        label: "使うコマンドの方向性を知りたいとき",
+        text: intro + "\n\n" +
+          "まだ解けません。次に試すとよいコマンドの『種類や方向性』のヒントだけください。" +
+          "完成したコマンド行そのものは、まだ書かないでください。" + taskBlock
+      },
+      {
+        label: "手順を一緒に整理したいとき",
+        text: intro + "\n\n" +
+          "考え方の手順を一緒に整理してください。ただし最終的な答え（実行するコマンド行や、" +
+          "見つけ出すパスワードそのもの）は、私が自分で組み立てられるよう空欄やヒントのまま残してください。" + taskBlock
+      }
+    ];
+  }
+
   // bash 風 last login (ランダム IP で十分それっぽくなる)
   function makeBanner(vfs) {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -39,6 +77,8 @@ Last login: ${dStr} from ${fakeIp}
   }
 
   function render() {
+    // レベルページ以外 (テストハーネス等) で誤って実行されないようガード
+    if (!$("levelStack")) return;
     const params = new URLSearchParams(location.search);
     let n = parseInt(params.get("l"), 10);
     if (!Number.isFinite(n)) n = 0;
@@ -100,10 +140,13 @@ Last login: ${dStr} from ${fakeIp}
       `<span class="chip">${escapeHtml(s)}</span>`
     ).join("");
 
-    const hintsHtml = (data.hints || []).map((h, i) =>
+    const aiPromptsHtml = buildAiPrompts(n, data).map((p, i) =>
       `<details class="disclosure">
-        <summary>ヒント ${i + 1}</summary>
-        <div class="disclosure__body">${escapeHtml(h)}</div>
+        <summary>AI への質問 ${i + 1}：${escapeHtml(p.label)}</summary>
+        <div class="disclosure__body">
+          <p class="muted" style="font-size: var(--t-small); margin: 0 0 var(--s-3);">下の文章をコピーして、ChatGPT などの AI にそのまま貼り付けてください。</p>
+          <div class="code"><pre>${escapeHtml(p.text)}</pre></div>
+        </div>
       </details>`
     ).join("");
 
@@ -142,17 +185,22 @@ Last login: ${dStr} from ${fakeIp}
         <div class="password-gate__feedback" id="pwFeedback" role="status" aria-live="polite"></div>
       </section>
 
-      ${hintsHtml || approachHtml ? `
+      ${aiPromptsHtml || approachHtml ? `
         <section class="level-card-block">
-          <h3>ヒント</h3>
-          <p class="muted" style="font-size: var(--t-small);">行き詰まったら、上から順番に開いて読んでください。最後の「正解までの道筋」が一番大きな手がかりです。</p>
+          <h3>AI に聞いてみる</h3>
+          <p class="muted" style="font-size: var(--t-small);">行き詰まったら、答えを丸写しさせるのではなく、AI からヒントを引き出すのがコツです。下のプロンプトをコピーして ChatGPT などに貼り付け、上から順に試してみてください。どうしても分からないときだけ、最後の「正解までの道筋」を開きましょう。</p>
           <div class="stack" style="margin-top: var(--s-3);">
-            ${hintsHtml}
+            ${aiPromptsHtml}
             ${approachHtml}
           </div>
         </section>
       ` : ""}
     `;
+
+    // 動的に挿入した AI プロンプト (.code) にコピーボタンを付与する
+    if (window.CopyButtons && typeof window.CopyButtons.rescan === "function") {
+      window.CopyButtons.rescan();
+    }
 
     // VFS とシェルの構築
     const fsSpec = data.fs || { user: "guest", home: "/home/guest", cwd: "/home/guest" };
@@ -201,6 +249,9 @@ Last login: ${dStr} from ${fakeIp}
       if (e.key === "Enter") { e.preventDefault(); tryPassword(e.target.value); }
     });
   }
+
+  // テストハーネスからの検証用に公開
+  window.LevelPage = { buildAiPrompts: buildAiPrompts };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", render);

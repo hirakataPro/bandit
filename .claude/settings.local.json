@@ -17,7 +17,8 @@
       "PowerShell($proc = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1' -PassThru -WindowStyle Hidden; Write-Output \\('SERVER_PID=' + $proc.Id\\); Start-Sleep -Milliseconds 800; try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8765/.test-wave-a.html' -UseBasicParsing -TimeoutSec 5; Write-Output \\('STATUS=' + $r.StatusCode\\) } catch { Write-Output \\('ERR=' + $_.Exception.Message\\) })",
       "PowerShell($chrome = 'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe'; $userData = Join-Path $env:TEMP \\('chrome-headless-' + \\(Get-Random\\)\\); $out = & $chrome --headless --disable-gpu --no-sandbox --user-data-dir=$userData --virtual-time-budget=10000 --run-all-compositor-stages-before-draw --dump-dom 'http://127.0.0.1:8765/.test-wave-a.html' 2>&1; $out | Out-String)",
       "PowerShell($chrome = 'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe'; $userData = Join-Path $env:TEMP \\('chrome-headless-' + \\(Get-Random\\)\\); $tmp = Join-Path $env:TEMP \\('chrome-out-' + \\(Get-Random\\) + '.txt'\\); Start-Process -FilePath $chrome -ArgumentList @\\('--headless','--disable-gpu','--no-sandbox',\\('--user-data-dir=' + $userData\\),'--virtual-time-budget=20000','--run-all-compositor-stages-before-draw','--dump-dom','http://127.0.0.1:8765/.test-wave-a.html'\\) -RedirectStandardOutput $tmp -NoNewWindow -Wait; Get-Content $tmp)",
-      "PowerShell(try { Stop-Process -Id 16164 -Force -ErrorAction Stop; Write-Output 'server stopped' } catch { Write-Output \\('stop err: ' + $_.Exception.Message\\) })"
+      "PowerShell(try { Stop-Process -Id 16164 -Force -ErrorAction Stop; Write-Output 'server stopped' } catch { Write-Output \\('stop err: ' + $_.Exception.Message\\) })",
+      "Read(//tmp/**)"
     ]
   }
 }

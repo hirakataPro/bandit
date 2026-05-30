@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>AI プロンプト置換テスト</title>
+<style>
+  body { font-family: monospace; background:#111; color:#eee; padding:20px; line-height:1.6; }
+  .pass { color:#3fb950; }
+  .fail { color:#f85149; font-weight:bold; }
+  h1 { font-size:16px; }
+  .sec { margin:14px 0 4px; color:#79c0ff; }
+  .summary { margin-top:16px; font-weight:bold; }
+  pre.sample { white-space:pre-wrap; background:#1b1b1b; border:1px solid #333; padding:8px; color:#bbb; }
+</style>
+</head>
+<body>
+<h1>AI プロンプト（段階・誘導型）置換テスト</h1>
+<div id="out"></div>
+
+<!-- 本番と同じスクリプトを読み込む。level.js は #levelStack が無いので render() は no-op -->
+<script src="assets/data/levels.js"></script>
+<script src="assets/data/level-data.js"></script>
+<script src="assets/js/copy.js"></script>
+<script src="assets/js/level.js"></script>
+
+<script>
+const out = document.getElementById("out");
+let pass = 0, fail = 0;
+function ok(name, cond, extra) {
+  const d = document.createElement("div");
+  d.className = cond ? "pass" : "fail";
+  d.textContent = (cond ? "PASS " : "FAIL ") + name + (extra && !cond ? " — " + extra : "");
+  out.appendChild(d);
+  cond ? pass++ : fail++;
+}
+function section(t){ const d=document.createElement("div"); d.className="sec"; d.textContent="▼ "+t; out.appendChild(d); }
+
+// LEVEL_DATA は配列ではなくオブジェクト ({0:..., 34:...}) なので件数は key 数で数える
+const DATA = window.LEVEL_DATA || {};
+const TASKS = window.LEVEL_AI_TASKS || [];
+const build = window.LevelPage && window.LevelPage.buildAiPrompts;
+const LEVEL_COUNT = Object.keys(DATA).length;
+
+section("基本構造");
+ok("LEVEL_DATA が読み込まれている", LEVEL_COUNT > 0, "count=" + LEVEL_COUNT);
+ok("LEVEL_AI_TASKS が読み込まれている", TASKS.length > 0, "length=" + TASKS.length);
+ok("AI_TASKS の数がレベル数と一致 (" + LEVEL_COUNT + ")", TASKS.length === LEVEL_COUNT,
+   "tasks=" + TASKS.length + " levels=" + LEVEL_COUNT);
+ok("buildAiPrompts が公開されている", typeof build === "function");
+
+section("各レベルの aiTask とプロンプト");
+let allHavePrompts = true, allThree = true, taskInjected = true, taskNonEmpty = true;
+for (let n = 0; n < LEVEL_COUNT; n++) {
+  if (typeof TASKS[n] !== "string" || !TASKS[n].trim()) { taskNonEmpty = false; ok("Lv" + n + ": aiTask が非空文字列", false, JSON.stringify(TASKS[n])); }
+  if (!build) break;
+  const prompts = build(n, DATA[n]);
+  if (!Array.isArray(prompts) || prompts.length !== 3) { allThree = false; ok("Lv" + n + ": 3 段のプロンプト", false, "len=" + (prompts && prompts.length)); continue; }
+  for (const p of prompts) {
+    if (!p.text || !p.text.trim() || !p.label) { allHavePrompts = false; ok("Lv" + n + ": 各プロンプトに label/text", false); }
+    if (TASKS[n] && p.text.indexOf(TASKS[n]) === -1) { taskInjected = false; ok("Lv" + n + ": 課題文が埋め込まれている", false); }
+  }
+}
+ok("全レベルの aiTask が非空", taskNonEmpty);
+ok("全レベルで 3 段のプロンプトが生成される", allThree);
+ok("全プロンプトに label/text がある", allHavePrompts);
+ok("全プロンプトに課題文が埋め込まれている", taskInjected);
+
+section("答え漏れチェック（最重要・誘導型の担保）");
+let noPassword = true, noApproach = true;
+for (let n = 0; n < LEVEL_COUNT; n++) {
+  if (!build) break;
+  const pw = String((DATA[n].password || "")).trim().toLowerCase();
+  const prompts = build(n, DATA[n]);
+  const joined = prompts.map(p => p.text).join("\n").toLowerCase();
+  // パスワード文字列が露出していないか
+  if (pw && joined.indexOf(pw) !== -1) { noPassword = false; ok("Lv" + n + ": プロンプトにパスワードが含まれない", false, pw); }
+  // aiTask 自体にも露出していないか
+  if (pw && String(TASKS[n] || "").toLowerCase().indexOf(pw) !== -1) { noPassword = false; ok("Lv" + n + ": aiTask にパスワードが含まれない", false, pw); }
+}
+ok("全レベル: プロンプト/aiTask に正解パスワードが含まれない", noPassword);
+
+section("コピーボタン連携 (copy.js)");
+ok("window.CopyButtons.rescan が存在", !!(window.CopyButtons && typeof window.CopyButtons.rescan === "function"));
+// 動的に .code を挿入 → rescan → .code__copy が付くか
+const host = document.createElement("div");
+const code = document.createElement("div");
+code.className = "code";
+const pre = document.createElement("pre");
+pre.textContent = "これはサンプルのプロンプトです。";
+code.appendChild(pre);
+host.appendChild(code);
+document.body.appendChild(host);
+if (window.CopyButtons && window.CopyButtons.rescan) window.CopyButtons.rescan();
+ok("rescan 後に .code__copy ボタンが生成される", !!code.querySelector(".code__copy"));
+ok("二重 rescan でボタンが重複しない", (function(){
+  if (window.CopyButtons && window.CopyButtons.rescan) window.CopyButtons.rescan();
+  return code.querySelectorAll(".code__copy").length === 1;
+})());
+
+section("フォールバック (aiTask 未定義時は story 先頭文を使う)");
+if (build) {
+  const fakeIdx = LEVEL_COUNT + 5; // TASKS に存在しない添字
+  const fp = build(fakeIdx, { story: "次のパスワードはテスト用ファイルにあります。\n余計な説明。" });
+  ok("未定義レベルでも 3 段生成される", Array.isArray(fp) && fp.length === 3);
+  ok("story 先頭文がフォールバックに使われる", !!fp && fp[0].text.indexOf("次のパスワードはテスト用ファイルにあります") !== -1);
+}
+
+section("サンプル表示 (Lv7)");
+if (build) {
+  const sample = document.createElement("pre");
+  sample.className = "sample";
+  sample.textContent = build(7, DATA[7]).map((p, i) => "── ステップ" + (i+1) + "：" + p.label + " ──\n" + p.text).join("\n\n");
+  out.appendChild(sample);
+}
+
+const s = document.createElement("div");
+s.className = "summary " + (fail === 0 ? "pass" : "fail");
+s.textContent = "結果: " + pass + " PASS / " + fail + " FAIL";
+out.appendChild(s);
+</script>
+</body>
+</html>
